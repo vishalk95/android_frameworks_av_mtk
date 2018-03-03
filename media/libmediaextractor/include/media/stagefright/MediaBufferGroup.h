@@ -51,7 +51,6 @@ public:
     // size of at least requstedSize.
     status_t acquire_buffer(
             MediaBufferBase **buffer, bool nonBlocking = false, size_t requestedSize = 0);
-
     size_t buffers() const;
 
     // If buffer is nullptr, have acquire_buffer() check for remote release.
