@@ -22,6 +22,7 @@ cc_defaults {
         "-Wall",
         "-Wextra",
         "-Werror",
+        "-DLEGACY_MTK_AV_BLOB",
     ],
     shared_libs: [
         "android.hardware.audio.common-util",
