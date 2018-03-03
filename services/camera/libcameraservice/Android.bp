@@ -132,6 +132,7 @@ cc_library_shared {
         "-Wextra",
         "-Werror",
         "-Wno-ignored-qualifiers",
+        "-DMTK_HARDWARE",
     ],
 
     product_variables: {
