@@ -260,6 +260,7 @@ cc_library {
         "StringArray.cpp",
         "NdkMediaFormatPriv.cpp",
         "NdkMediaErrorPriv.cpp",
+        "mtkaudio_stubs.cpp",
     ],
 
     aidl: {
