@@ -39,6 +39,9 @@ const std::string kLegacyProviderName("legacy/0");
 // Slash-separated list of provider types to consider for use via the old camera API
 const std::string kStandardProviderTypes("internal/legacy");
 
+// Slash-separated list of provider types to consider for use via the old camera API
+const std::string kStandardProviderTypes("internal/legacy/external");
+
 } // anonymous namespace
 
 CameraProviderManager::HardwareServiceInteractionProxy
@@ -108,8 +111,10 @@ std::vector<std::string> CameraProviderManager::getAPI1CompatibleCameraDeviceIds
     std::lock_guard<std::mutex> lock(mInterfaceMutex);
     std::vector<std::string> deviceIds;
     for (auto& provider : mProviders) {
-        for (auto& id : provider->mUniqueAPI1CompatibleCameraIds) {
-            deviceIds.push_back(id);
+        if (kStandardProviderTypes.find(provider->getType()) != std::string::npos) {
+            for (auto& id : provider->mUniqueAPI1CompatibleCameraIds) {
+                deviceIds.push_back(id);
+            }
         }
     }
     return deviceIds;
