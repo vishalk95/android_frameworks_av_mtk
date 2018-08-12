@@ -119,7 +119,8 @@ status_t CameraFlashlight::setTorchMode(const String8& cameraId, bool enabled) {
 }
 
 int CameraFlashlight::getNumberOfCameras() {
-    return mProviderManager->getAPI1CompatibleCameraCount();
+    size_t len = mProviderManager->getAPI1CompatibleCameraDeviceIds().size();
+    return static_cast<int>(len);
 }
 
 status_t CameraFlashlight::findFlashUnits() {
@@ -221,9 +222,8 @@ status_t CameraFlashlight::prepareDeviceOpen(const String8& cameraId) {
             int numCameras = getNumberOfCameras();
             for (int i = 0; i < numCameras; i++) {
                 if (hasFlashUnitLocked(String8::format("%d", i))) {
-                    mCallbacks->torch_mode_status_change(mCallbacks,
-                            String8::format("%d", i).string(),
-                            TORCH_MODE_STATUS_NOT_AVAILABLE);
+                    mCallbacks->onTorchStatusChanged(
+                            String8::format("%d", i), TorchModeStatus::NOT_AVAILABLE);
                 }
             }
         }
@@ -266,9 +266,8 @@ status_t CameraFlashlight::deviceClosed(const String8& cameraId) {
         int numCameras = getNumberOfCameras();
         for (int i = 0; i < numCameras; i++) {
             if (hasFlashUnitLocked(String8::format("%d", i))) {
-                mCallbacks->torch_mode_status_change(mCallbacks,
-                        String8::format("%d", i).string(),
-                        TORCH_MODE_STATUS_AVAILABLE_OFF);
+                mCallbacks->onTorchStatusChanged(
+                        String8::format("%d", i), TorchModeStatus::AVAILABLE_OFF);
             }
         }
     }
