@@ -40,7 +40,7 @@ const std::string kLegacyProviderName("legacy/0");
 const std::string kStandardProviderTypes("internal/legacy");
 
 // Slash-separated list of provider types to consider for use via the old camera API
-const std::string kStandardProviderTypes("internal/legacy/external");
+const std::string kStandardProviderTypes("internal/legacy");
 
 } // anonymous namespace
 
@@ -607,10 +607,6 @@ status_t CameraProviderManager::ProviderInfo::addDevice(const std::string& name,
 void CameraProviderManager::ProviderInfo::removeDevice(std::string id) {
     for (auto it = mDevices.begin(); it != mDevices.end(); it++) {
         if ((*it)->mId == id) {
-            mUniqueCameraIds.erase(id);
-            if ((*it)->isAPI1Compatible()) {
-                mUniqueAPI1CompatibleCameraIds.erase(id);
-            }
             mDevices.erase(it);
             break;
         }
