@@ -884,6 +884,43 @@ binder::Status CameraDeviceClient::createSurfaceFromGbp(
     return binder::Status::ok();
 }
 
+bool CameraDeviceClient::checkPhysicalCameraId(const String8& physicalCameraId) {
+    if (0 == physicalCameraId.size()) {
+        return true;
+    }
+
+    CameraMetadata staticInfo = mDevice->info();
+    camera_metadata_entry_t entryCap;
+    bool isLogicalCam = false;
+
+    entryCap = staticInfo.find(ANDROID_REQUEST_AVAILABLE_CAPABILITIES);
+    for (size_t i = 0; i < entryCap.count; ++i) {
+        uint8_t capability = entryCap.data.u8[i];
+        if (capability == ANDROID_REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) {
+            isLogicalCam = true;
+        }
+    }
+    if (!isLogicalCam) {
+        return false;
+    }
+
+    camera_metadata_entry_t entryIds = staticInfo.find(ANDROID_LOGICAL_MULTI_CAMERA_PHYSICAL_IDS);
+    const uint8_t* ids = entryIds.data.u8;
+    size_t start = 0;
+    for (size_t i = 0; i < entryIds.count; ++i) {
+        if (ids[i] == '\0') {
+            if (start != i) {
+                String8 currentId((const char*)ids+start);
+                if (currentId == physicalCameraId) {
+                    return true;
+                }
+            }
+            start = i+1;
+        }
+    }
+    return false;
+}
+
 bool CameraDeviceClient::roundBufferDimensionNearest(int32_t width, int32_t height,
         int32_t format, android_dataspace dataSpace, const CameraMetadata& info,
         /*out*/int32_t* outWidth, /*out*/int32_t* outHeight) {

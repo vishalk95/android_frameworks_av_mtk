@@ -108,10 +108,8 @@ std::vector<std::string> CameraProviderManager::getAPI1CompatibleCameraDeviceIds
     std::lock_guard<std::mutex> lock(mInterfaceMutex);
     std::vector<std::string> deviceIds;
     for (auto& provider : mProviders) {
-        if (kStandardProviderTypes.find(provider->getType()) != std::string::npos) {
-            for (auto& id : provider->mUniqueAPI1CompatibleCameraIds) {
-                deviceIds.push_back(id);
-            }
+        for (auto& id : provider->mUniqueAPI1CompatibleCameraIds) {
+            deviceIds.push_back(id);
         }
     }
     return deviceIds;
@@ -599,6 +597,19 @@ status_t CameraProviderManager::ProviderInfo::addDevice(const std::string& name,
         *parsedId = id;
     }
     return OK;
+}
+
+void CameraProviderManager::ProviderInfo::removeDevice(std::string id) {
+    for (auto it = mDevices.begin(); it != mDevices.end(); it++) {
+        if ((*it)->mId == id) {
+            mUniqueCameraIds.erase(id);
+            if ((*it)->isAPI1Compatible()) {
+                mUniqueAPI1CompatibleCameraIds.erase(id);
+            }
+            mDevices.erase(it);
+            break;
+        }
+    }
 }
 
 status_t CameraProviderManager::ProviderInfo::dump(int fd, const Vector<String16>&) const {
