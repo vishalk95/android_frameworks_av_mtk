@@ -4,6 +4,8 @@ cc_library_headers {
     vendor_available: true,
 }
 
+export_include_dirs: ["../colorconversion/inc/"],
+
 cc_library_shared {
     name: "libstagefright",
 
@@ -92,6 +94,7 @@ cc_library_shared {
         "libvorbisidec",
         "libmediadrm",
         "libnativewindow",
+        "libdpframework",
 
         "libmedia_helper",
         "libstagefright_omx_utils",
