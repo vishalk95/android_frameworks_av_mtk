@@ -8,6 +8,7 @@ cc_library_static {
 
     include_dirs: [
         "frameworks/native/include/media/openmax",
+        "frameworks/av/media/libstagefright/colorconversion/inc",
     ],
 
     shared_libs: [
