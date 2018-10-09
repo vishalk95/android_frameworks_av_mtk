@@ -165,6 +165,11 @@ ifeq ($(TARGET_OMX_LEGACY_RESCALING),true)
 LOCAL_CFLAGS += -DUSE_LEGACY_RESCALING
 endif
 
+ifeq ($(strip $(BOARD_USES_MTK_HARDWARE)),true)
+
+LOCAL_SHARED_LIBRARIES += libdpframework
+endif
+
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wno-error=deprecated-declarations -Wall
 
 LOCAL_C_INCLUDES += $(call project-path-for,qcom-media)/mm-core/inc
