@@ -33,7 +33,7 @@ namespace android {
 
 AudioOutputDescriptor::AudioOutputDescriptor(const sp<AudioPort>& port,
                                              AudioPolicyClientInterface *clientInterface)
-    : mPort(port), mDevice(AUDIO_DEVICE_NONE),mIoHandle(0),
+    : mPort(port), mDevice(AUDIO_DEVICE_NONE), mIoHandle(0),
       mClientInterface(clientInterface), mPatchHandle(AUDIO_PATCH_HANDLE_NONE), mId(0)
 {
     // clear usage count for all stream types
@@ -75,13 +75,13 @@ audio_devices_t AudioOutputDescriptor::supportedDevices()
 }
 
 bool AudioOutputDescriptor::sharesHwModuleWith(
-        const sp<AudioOutputDescriptor> outputDesc)
+        const sp<AudioOutputDescriptor>& outputDesc)
 {
     if (outputDesc->isDuplicated()) {
         return sharesHwModuleWith(outputDesc->subOutput1()) ||
                     sharesHwModuleWith(outputDesc->subOutput2());
     } else {
-        return (getModuleHandle() == outputDesc->getModuleHandle());
+        return hasSameHwModuleAs(outputDesc);
     }
 }
 
@@ -223,7 +223,8 @@ SwAudioOutputDescriptor::SwAudioOutputDescriptor(const sp<IOProfile>& profile,
     : AudioOutputDescriptor(profile, clientInterface),
     mProfile(profile), mLatency(0),
     mFlags((audio_output_flags_t)0), mPolicyMix(NULL),
-    mOutput1(0), mOutput2(0), mDirectOpenCount(0), mGlobalRefCount(0)
+    mOutput1(0), mOutput2(0), mDirectOpenCount(0),
+    mDirectClientSession(AUDIO_SESSION_NONE), mGlobalRefCount(0)
 {
     if (profile != NULL) {
         mFlags = (audio_output_flags_t)profile->getFlags();
@@ -264,7 +265,7 @@ audio_devices_t SwAudioOutputDescriptor::device() const
 }
 
 bool SwAudioOutputDescriptor::sharesHwModuleWith(
-        const sp<AudioOutputDescriptor> outputDesc)
+        const sp<AudioOutputDescriptor>& outputDesc)
 {
     if (isDuplicated()) {
         return mOutput1->sharesHwModuleWith(outputDesc) || mOutput2->sharesHwModuleWith(outputDesc);
@@ -483,23 +484,6 @@ audio_io_handle_t SwAudioOutputCollection::getA2dpOutput() const
         }
     }
     return 0;
-}
-
-bool SwAudioOutputCollection::isA2dpOnPrimary() const
-{
-    sp<SwAudioOutputDescriptor> primaryOutput = getPrimaryOutput();
-
-    if ((primaryOutput != NULL) && (primaryOutput->mProfile != NULL)
-        && (primaryOutput->mProfile->mModule != NULL)) {
-        Vector <sp<IOProfile>> primaryOutputProfiles =
-                               primaryOutput->mProfile->mModule->mOutputProfiles;
-        for (size_t j = 0; j < primaryOutputProfiles.size(); j++) {
-            if (primaryOutputProfiles[j]->supportDevice(AUDIO_DEVICE_OUT_ALL_A2DP)) {
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 sp<SwAudioOutputDescriptor> SwAudioOutputCollection::getPrimaryOutput() const

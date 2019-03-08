@@ -17,13 +17,11 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "ASessionDescription"
 #include <utils/Log.h>
-#include <cutils/log.h>
 
 #include "ASessionDescription.h"
 
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AString.h>
-#include <mediaplayerservice/AVMediaServiceExtensions.h>
 
 #include <stdlib.h>
 
@@ -213,7 +211,7 @@ void ASessionDescription::getFormatType(
 
     *PT = x;
 
-    char key[32];
+    char key[20];
     snprintf(key, sizeof(key), "a=rtpmap:%lu", x);
     if (findAttribute(index, key, desc)) {
         snprintf(key, sizeof(key), "a=fmtp:%lu", x);
@@ -232,11 +230,8 @@ bool ASessionDescription::getDimensions(
     *width = 0;
     *height = 0;
 
-    char key[33];
+    char key[20];
     snprintf(key, sizeof(key), "a=framesize:%lu", PT);
-    if (PT > 9999999) {
-        android_errorWriteLog(0x534e4554, "25747670");
-    }
     AString value;
     if (!findAttribute(index, key, &value)) {
         return false;
@@ -271,8 +266,7 @@ bool ASessionDescription::getDurationUs(int64_t *durationUs) const {
     }
 
     float from, to;
-    if (!AVMediaServiceUtils::get()->parseNTPRange(
-            value.c_str() + 4, &from, &to)) {
+    if (!parseNTPRange(value.c_str() + 4, &from, &to)) {
         return false;
     }
 

@@ -29,7 +29,6 @@
 #include <ui/GraphicBuffer.h>
 #include <gui/BufferItem.h>
 #include <gui/ISurfaceComposer.h>
-#include <gui/IGraphicBufferAlloc.h>
 #include <OMX_Component.h>
 
 #include <utils/Log.h>
@@ -97,13 +96,13 @@ void SurfaceMediaSource::setFrameAvailableListener(
     mFrameAvailableListener = listener;
 }
 
-void SurfaceMediaSource::dump(String8& result) const
+void SurfaceMediaSource::dumpState(String8& result) const
 {
     char buffer[1024];
-    dump(result, "", buffer, 1024);
+    dumpState(result, "", buffer, 1024);
 }
 
-void SurfaceMediaSource::dump(
+void SurfaceMediaSource::dumpState(
         String8& result,
         const char* /* prefix */,
         char* buffer,
@@ -129,11 +128,7 @@ status_t SurfaceMediaSource::setFrameRate(int32_t fps)
 
 MetadataBufferType SurfaceMediaSource::metaDataStoredInVideoBuffers() const {
     ALOGV("isMetaDataStoredInVideoBuffers");
-#ifdef CAMCORDER_GRALLOC_SOURCE
-    return kMetadataBufferTypeGrallocSource;
-#else
     return kMetadataBufferTypeANWBuffer;
-#endif
 }
 
 int32_t SurfaceMediaSource::getFrameRate( ) const {
@@ -171,7 +166,7 @@ status_t SurfaceMediaSource::start(MetaData *params)
         mMaxAcquiredBufferCount = bufferCount;
     }
 
-    CHECK_GT(mMaxAcquiredBufferCount, 1);
+    CHECK_GT(mMaxAcquiredBufferCount, 1u);
 
     status_t err =
         mConsumer->setMaxAcquiredBufferCount(mMaxAcquiredBufferCount);
@@ -190,7 +185,7 @@ status_t SurfaceMediaSource::setMaxAcquiredBufferCount(size_t count) {
     ALOGV("setMaxAcquiredBufferCount(%zu)", count);
     Mutex::Autolock lock(mMutex);
 
-    CHECK_GT(count, 1);
+    CHECK_GT(count, 1u);
     mMaxAcquiredBufferCount = count;
 
     return OK;
@@ -253,35 +248,6 @@ sp<MetaData> SurfaceMediaSource::getFormat()
     meta->setCString(kKeyMIMEType, MEDIA_MIMETYPE_VIDEO_RAW);
     return meta;
 }
-
-#ifdef CAMCORDER_GRALLOC_SOURCE
-// Pass the data to the MediaBuffer. Pass in only the metadata
-// The metadata passed consists of two parts:
-// 1. First, there is an integer indicating that it is a GRAlloc
-// source (kMetadataBufferTypeGrallocSource)
-// 2. This is followed by the buffer_handle_t that is a handle to the
-// GRalloc buffer. The encoder needs to interpret this GRalloc handle
-// and encode the frames.
-// --------------------------------------------------------------
-// |  kMetadataBufferTypeGrallocSource | sizeof(buffer_handle_t) |
-// --------------------------------------------------------------
-// Note: Call only when you have the lock
-static void passMetadataBuffer(MediaBuffer **buffer,
-        buffer_handle_t bufferHandle) {
-    *buffer = new MediaBuffer(4 + sizeof(buffer_handle_t));
-    char *data = (char *)(*buffer)->data();
-    if (data == NULL) {
-        ALOGE("Cannot allocate memory for metadata buffer!");
-        return;
-    }
-    OMX_U32 type = kMetadataBufferTypeGrallocSource;
-    memcpy(data, &type, 4);
-    memcpy(data + 4, &bufferHandle, sizeof(buffer_handle_t));
-
-    ALOGV("handle = %p, , offset = %zu, length = %zu",
-            bufferHandle, (*buffer)->range_length(), (*buffer)->range_offset());
-}
-#endif
 
 // Pass the data to the MediaBuffer. Pass in only the metadata
 // Note: Call only when you have the lock
@@ -385,11 +351,7 @@ status_t SurfaceMediaSource::read(
     mNumFramesEncoded++;
     // Pass the data to the MediaBuffer. Pass in only the metadata
 
-#ifdef CAMCORDER_GRALLOC_SOURCE
-    passMetadataBuffer(buffer, mSlots[mCurrentSlot].mGraphicBuffer->handle);
-#else
     passMetadataBuffer_l(buffer, mSlots[mCurrentSlot].mGraphicBuffer->getNativeBuffer());
-#endif
 
     (*buffer)->setObserver(this);
     (*buffer)->add_ref();
@@ -427,11 +389,7 @@ void SurfaceMediaSource::signalBufferReturned(MediaBuffer *buffer) {
     buffer_handle_t bufferHandle = getMediaBufferHandle(buffer);
 
     for (size_t i = 0; i < mCurrentBuffers.size(); i++) {
-#ifdef CAMCORDER_GRALLOC_SOURCE
-        if (mCurrentBuffers[i]->handle == bufferHandle) {
-#else
         if ((buffer_handle_t)mCurrentBuffers[i]->getNativeBuffer() == bufferHandle) {
-#endif
             mCurrentBuffers.removeAt(i);
             foundBuffer = true;
             break;
@@ -447,11 +405,7 @@ void SurfaceMediaSource::signalBufferReturned(MediaBuffer *buffer) {
             continue;
         }
 
-#ifdef CAMCORDER_GRALLOC_SOURCE
-        if (bufferHandle == mSlots[id].mGraphicBuffer->handle) {
-#else
         if (bufferHandle == (buffer_handle_t)mSlots[id].mGraphicBuffer->getNativeBuffer()) {
-#endif
             ALOGV("Slot %d returned, matches handle = %p", id,
                     mSlots[id].mGraphicBuffer->handle);
 

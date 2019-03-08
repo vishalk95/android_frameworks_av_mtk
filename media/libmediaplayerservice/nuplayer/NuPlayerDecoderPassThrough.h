@@ -38,15 +38,12 @@ protected:
     virtual void onConfigure(const sp<AMessage> &format);
     virtual void onSetParameters(const sp<AMessage> &params);
     virtual void onSetRenderer(const sp<Renderer> &renderer);
-    virtual void onGetInputBuffers(Vector<sp<ABuffer> > *dstBuffers);
     virtual void onResume(bool notifyComplete);
     virtual void onFlush();
     virtual void onShutdown(bool notifyComplete);
     virtual bool doRequestBuffers();
-    virtual sp<ABuffer> aggregateBuffer(const sp<ABuffer> &accessUnit);
 
-    size_t mAggregateBufferSizeBytes;
-
+private:
     enum {
         kWhatBufferConsumed     = 'bufC',
     };
@@ -62,7 +59,7 @@ protected:
     sp<ABuffer> mPendingAudioAccessUnit;
     status_t    mPendingAudioErr;
     sp<ABuffer> mAggregateBuffer;
-private:
+
     // mPendingBuffersToDrain are only for debugging. It can be removed
     // when the power investigation is done.
     size_t  mPendingBuffersToDrain;
@@ -73,6 +70,7 @@ private:
     bool isDoneFetching() const;
 
     status_t dequeueAccessUnit(sp<ABuffer> *accessUnit);
+    sp<ABuffer> aggregateBuffer(const sp<ABuffer> &accessUnit);
     status_t fetchInputData(sp<AMessage> &reply);
     void doFlush(bool notifyComplete);
 

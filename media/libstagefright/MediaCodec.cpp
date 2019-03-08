@@ -19,7 +19,11 @@
 #include <inttypes.h>
 
 #include "include/avc_utils.h"
+#include "include/SecureBuffer.h"
+#include "include/SharedMemoryBuffer.h"
 #include "include/SoftwareRenderer.h"
+
+#include <android/hardware/cas/native/1.0/IDescrambler.h>
 
 #include <binder/IMemory.h>
 #include <binder/IPCThreadState.h>
@@ -30,10 +34,13 @@
 #include <media/ICrypto.h>
 #include <media/IOMX.h>
 #include <media/IResourceManagerService.h>
+#include <media/MediaCodecBuffer.h>
+#include <media/MediaAnalyticsItem.h>
 #include <media/stagefright/foundation/ABuffer.h>
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AMessage.h>
 #include <media/stagefright/foundation/AString.h>
+#include <media/stagefright/foundation/AUtils.h>
 #include <media/stagefright/foundation/hexdump.h>
 #include <media/stagefright/ACodec.h>
 #include <media/stagefright/BufferProducerWrapper.h>
@@ -50,11 +57,32 @@
 #include <private/android_filesystem_config.h>
 #include <utils/Log.h>
 #include <utils/Singleton.h>
-#include <stagefright/AVExtensions.h>
 
 namespace android {
 
-static int64_t getId(sp<IResourceManagerClient> client) {
+// key for media statistics
+static const char *kCodecKeyName = "codec";
+// attrs for media statistics
+static const char *kCodecCodec = "android.media.mediacodec.codec";  /* e.g. OMX.google.aac.decoder */
+static const char *kCodecMime = "android.media.mediacodec.mime";    /* e.g. audio/mime */
+static const char *kCodecMode = "android.media.mediacodec.mode";    /* audio, video */
+static const char *kCodecSecure = "android.media.mediacodec.secure";   /* 0, 1 */
+static const char *kCodecHeight = "android.media.mediacodec.height";   /* 0..n */
+static const char *kCodecWidth = "android.media.mediacodec.width";     /* 0..n */
+static const char *kCodecRotation = "android.media.mediacodec.rotation-degrees";  /* 0/90/180/270 */
+static const char *kCodecCrypto = "android.media.mediacodec.crypto";   /* 0,1 */
+static const char *kCodecEncoder = "android.media.mediacodec.encoder"; /* 0,1 */
+
+static const char *kCodecBytesIn = "android.media.mediacodec.bytesin";  /* 0..n */
+static const char *kCodecProfile = "android.media.mediacodec.profile";  /* 0..n */
+static const char *kCodecLevel = "android.media.mediacodec.level";  /* 0..n */
+static const char *kCodecMaxWidth = "android.media.mediacodec.maxwidth";  /* 0..n */
+static const char *kCodecMaxHeight = "android.media.mediacodec.maxheight";  /* 0..n */
+static const char *kCodecError = "android.media.mediacodec.errcode";
+static const char *kCodecErrorState = "android.media.mediacodec.errstate";
+
+
+static int64_t getId(const sp<IResourceManagerClient> &client) {
     return (int64_t) client.get();
 }
 
@@ -64,9 +92,12 @@ static bool isResourceError(status_t err) {
 
 static const int kMaxRetry = 2;
 static const int kMaxReclaimWaitTimeInUs = 500000;  // 0.5s
+static const int kNumBuffersAlign = 16;
+
+////////////////////////////////////////////////////////////////////////////////
 
 struct ResourceManagerClient : public BnResourceManagerClient {
-    ResourceManagerClient(MediaCodec* codec) : mMediaCodec(codec) {}
+    explicit ResourceManagerClient(MediaCodec* codec) : mMediaCodec(codec) {}
 
     virtual bool reclaimResource() {
         sp<MediaCodec> codec = mMediaCodec.promote();
@@ -143,7 +174,7 @@ void MediaCodec::ResourceManagerServiceProxy::binderDied(const wp<IBinder>& /*wh
 
 void MediaCodec::ResourceManagerServiceProxy::addResource(
         int64_t clientId,
-        const sp<IResourceManagerClient> client,
+        const sp<IResourceManagerClient> &client,
         const Vector<MediaResource> &resources) {
     Mutex::Autolock _l(mLock);
     if (mService == NULL) {
@@ -169,10 +200,221 @@ bool MediaCodec::ResourceManagerServiceProxy::reclaimResource(
     return mService->reclaimResource(mPid, resources);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
+MediaCodec::BufferInfo::BufferInfo() : mOwnedByClient(false) {}
+
+////////////////////////////////////////////////////////////////////////////////
+
+namespace {
+
+enum {
+    kWhatFillThisBuffer      = 'fill',
+    kWhatDrainThisBuffer     = 'drai',
+    kWhatEOS                 = 'eos ',
+    kWhatStartCompleted      = 'Scom',
+    kWhatStopCompleted       = 'scom',
+    kWhatReleaseCompleted    = 'rcom',
+    kWhatFlushCompleted      = 'fcom',
+    kWhatError               = 'erro',
+    kWhatComponentAllocated  = 'cAll',
+    kWhatComponentConfigured = 'cCon',
+    kWhatInputSurfaceCreated = 'isfc',
+    kWhatInputSurfaceAccepted = 'isfa',
+    kWhatSignaledInputEOS    = 'seos',
+    kWhatOutputFramesRendered = 'outR',
+    kWhatOutputBuffersChanged = 'outC',
+};
+
+class BufferCallback : public CodecBase::BufferCallback {
+public:
+    explicit BufferCallback(const sp<AMessage> &notify);
+    virtual ~BufferCallback() = default;
+
+    virtual void onInputBufferAvailable(
+            size_t index, const sp<MediaCodecBuffer> &buffer) override;
+    virtual void onOutputBufferAvailable(
+            size_t index, const sp<MediaCodecBuffer> &buffer) override;
+private:
+    const sp<AMessage> mNotify;
+};
+
+BufferCallback::BufferCallback(const sp<AMessage> &notify)
+    : mNotify(notify) {}
+
+void BufferCallback::onInputBufferAvailable(
+        size_t index, const sp<MediaCodecBuffer> &buffer) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatFillThisBuffer);
+    notify->setSize("index", index);
+    notify->setObject("buffer", buffer);
+    notify->post();
+}
+
+void BufferCallback::onOutputBufferAvailable(
+        size_t index, const sp<MediaCodecBuffer> &buffer) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatDrainThisBuffer);
+    notify->setSize("index", index);
+    notify->setObject("buffer", buffer);
+    notify->post();
+}
+
+class CodecCallback : public CodecBase::CodecCallback {
+public:
+    explicit CodecCallback(const sp<AMessage> &notify);
+    virtual ~CodecCallback() = default;
+
+    virtual void onEos(status_t err) override;
+    virtual void onStartCompleted() override;
+    virtual void onStopCompleted() override;
+    virtual void onReleaseCompleted() override;
+    virtual void onFlushCompleted() override;
+    virtual void onError(status_t err, enum ActionCode actionCode) override;
+    virtual void onComponentAllocated(const char *componentName) override;
+    virtual void onComponentConfigured(
+            const sp<AMessage> &inputFormat, const sp<AMessage> &outputFormat) override;
+    virtual void onInputSurfaceCreated(
+            const sp<AMessage> &inputFormat,
+            const sp<AMessage> &outputFormat,
+            const sp<BufferProducerWrapper> &inputSurface) override;
+    virtual void onInputSurfaceCreationFailed(status_t err) override;
+    virtual void onInputSurfaceAccepted(
+            const sp<AMessage> &inputFormat,
+            const sp<AMessage> &outputFormat) override;
+    virtual void onInputSurfaceDeclined(status_t err) override;
+    virtual void onSignaledInputEOS(status_t err) override;
+    virtual void onOutputFramesRendered(const std::list<FrameRenderTracker::Info> &done) override;
+    virtual void onOutputBuffersChanged() override;
+private:
+    const sp<AMessage> mNotify;
+};
+
+CodecCallback::CodecCallback(const sp<AMessage> &notify) : mNotify(notify) {}
+
+void CodecCallback::onEos(status_t err) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatEOS);
+    notify->setInt32("err", err);
+    notify->post();
+}
+
+void CodecCallback::onStartCompleted() {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatStartCompleted);
+    notify->post();
+}
+
+void CodecCallback::onStopCompleted() {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatStopCompleted);
+    notify->post();
+}
+
+void CodecCallback::onReleaseCompleted() {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatReleaseCompleted);
+    notify->post();
+}
+
+void CodecCallback::onFlushCompleted() {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatFlushCompleted);
+    notify->post();
+}
+
+void CodecCallback::onError(status_t err, enum ActionCode actionCode) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatError);
+    notify->setInt32("err", err);
+    notify->setInt32("actionCode", actionCode);
+    notify->post();
+}
+
+void CodecCallback::onComponentAllocated(const char *componentName) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatComponentAllocated);
+    notify->setString("componentName", componentName);
+    notify->post();
+}
+
+void CodecCallback::onComponentConfigured(
+        const sp<AMessage> &inputFormat, const sp<AMessage> &outputFormat) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatComponentConfigured);
+    notify->setMessage("input-format", inputFormat);
+    notify->setMessage("output-format", outputFormat);
+    notify->post();
+}
+
+void CodecCallback::onInputSurfaceCreated(
+        const sp<AMessage> &inputFormat,
+        const sp<AMessage> &outputFormat,
+        const sp<BufferProducerWrapper> &inputSurface) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatInputSurfaceCreated);
+    notify->setMessage("input-format", inputFormat);
+    notify->setMessage("output-format", outputFormat);
+    notify->setObject("input-surface", inputSurface);
+    notify->post();
+}
+
+void CodecCallback::onInputSurfaceCreationFailed(status_t err) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatInputSurfaceCreated);
+    notify->setInt32("err", err);
+    notify->post();
+}
+
+void CodecCallback::onInputSurfaceAccepted(
+        const sp<AMessage> &inputFormat,
+        const sp<AMessage> &outputFormat) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatInputSurfaceAccepted);
+    notify->setMessage("input-format", inputFormat);
+    notify->setMessage("output-format", outputFormat);
+    notify->post();
+}
+
+void CodecCallback::onInputSurfaceDeclined(status_t err) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatInputSurfaceAccepted);
+    notify->setInt32("err", err);
+    notify->post();
+}
+
+void CodecCallback::onSignaledInputEOS(status_t err) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatSignaledInputEOS);
+    if (err != OK) {
+        notify->setInt32("err", err);
+    }
+    notify->post();
+}
+
+void CodecCallback::onOutputFramesRendered(const std::list<FrameRenderTracker::Info> &done) {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatOutputFramesRendered);
+    if (MediaCodec::CreateFramesRenderedMessage(done, notify)) {
+        notify->post();
+    }
+}
+
+void CodecCallback::onOutputBuffersChanged() {
+    sp<AMessage> notify(mNotify->dup());
+    notify->setInt32("what", kWhatOutputBuffersChanged);
+    notify->post();
+}
+
+}  // namespace
+
+////////////////////////////////////////////////////////////////////////////////
+
 // static
 sp<MediaCodec> MediaCodec::CreateByType(
-        const sp<ALooper> &looper, const AString &mime, bool encoder, status_t *err, pid_t pid) {
-    sp<MediaCodec> codec = new MediaCodec(looper, pid);
+        const sp<ALooper> &looper, const AString &mime, bool encoder, status_t *err, pid_t pid,
+        uid_t uid) {
+    sp<MediaCodec> codec = new MediaCodec(looper, pid, uid);
 
     const status_t ret = codec->init(mime, true /* nameIsType */, encoder);
     if (err != NULL) {
@@ -183,8 +425,8 @@ sp<MediaCodec> MediaCodec::CreateByType(
 
 // static
 sp<MediaCodec> MediaCodec::CreateByComponentName(
-        const sp<ALooper> &looper, const AString &name, status_t *err, pid_t pid) {
-    sp<MediaCodec> codec = new MediaCodec(looper, pid);
+        const sp<ALooper> &looper, const AString &name, status_t *err, pid_t pid, uid_t uid) {
+    sp<MediaCodec> codec = new MediaCodec(looper, pid, uid);
 
     const status_t ret = codec->init(name, false /* nameIsType */, false /* encoder */);
     if (err != NULL) {
@@ -194,71 +436,29 @@ sp<MediaCodec> MediaCodec::CreateByComponentName(
 }
 
 // static
-status_t MediaCodec::QueryCapabilities(
-        const AString &name, const AString &mime, bool isEncoder,
-        sp<MediaCodecInfo::Capabilities> *caps /* nonnull */) {
-    // TRICKY: this method is used by MediaCodecList/Info during its
-    // initialization. As such, we cannot create a MediaCodec instance
-    // because that requires an initialized MediaCodecList.
-
-    sp<CodecBase> codec = GetCodecBase(name);
-    if (codec == NULL) {
-        return NAME_NOT_FOUND;
-    }
-
-    return codec->queryCapabilities(name, mime, isEncoder, caps);
-}
-
-// static
 sp<PersistentSurface> MediaCodec::CreatePersistentInputSurface() {
     OMXClient client;
-    CHECK_EQ(client.connect(), (status_t)OK);
+    if (client.connect() != OK) {
+        ALOGE("Failed to connect to OMX to create persistent input surface.");
+        return NULL;
+    }
+
     sp<IOMX> omx = client.interface();
 
-    const sp<IMediaCodecList> mediaCodecList = MediaCodecList::getInstance();
-    if (mediaCodecList == NULL) {
-        ALOGE("Failed to obtain MediaCodecList!");
-        return NULL; // if called from Java should raise IOException
-    }
-
-    AString tmp;
-    sp<AMessage> globalSettings = mediaCodecList->getGlobalSettings();
-    if (globalSettings == NULL || !globalSettings->findString(
-            kMaxEncoderInputBuffers, &tmp)) {
-        ALOGE("Failed to get encoder input buffer count!");
-        return NULL;
-    }
-
-    int32_t bufferCount = strtol(tmp.c_str(), NULL, 10);
-    if (bufferCount <= 0
-            || bufferCount > BufferQueue::MAX_MAX_ACQUIRED_BUFFERS) {
-        ALOGE("Encoder input buffer count is invalid!");
-        return NULL;
-    }
-
     sp<IGraphicBufferProducer> bufferProducer;
-    sp<IGraphicBufferConsumer> bufferConsumer;
+    sp<IGraphicBufferSource> bufferSource;
 
-    status_t err = omx->createPersistentInputSurface(
-            &bufferProducer, &bufferConsumer);
+    status_t err = omx->createInputSurface(&bufferProducer, &bufferSource);
 
     if (err != OK) {
         ALOGE("Failed to create persistent input surface.");
         return NULL;
     }
 
-    err = bufferConsumer->setMaxAcquiredBufferCount(bufferCount);
-
-    if (err != NO_ERROR) {
-        ALOGE("Unable to set BQ max acquired buffer count to %u: %d",
-                bufferCount, err);
-        return NULL;
-    }
-
-    return new PersistentSurface(bufferProducer, bufferConsumer);
+    return new PersistentSurface(bufferProducer, bufferSource);
 }
 
-MediaCodec::MediaCodec(const sp<ALooper> &looper, pid_t pid)
+MediaCodec::MediaCodec(const sp<ALooper> &looper, pid_t pid, uid_t uid)
     : mState(UNINITIALIZED),
       mReleasedByResourceManager(false),
       mLooper(looper),
@@ -267,6 +467,7 @@ MediaCodec::MediaCodec(const sp<ALooper> &looper, pid_t pid)
       mFlags(0),
       mStickyError(OK),
       mSoftRenderer(NULL),
+      mAnalyticsItem(NULL),
       mResourceManagerClient(new ResourceManagerClient(this)),
       mResourceManagerService(new ResourceManagerServiceProxy(pid)),
       mBatteryStatNotified(false),
@@ -280,11 +481,42 @@ MediaCodec::MediaCodec(const sp<ALooper> &looper, pid_t pid)
       mDequeueOutputReplyID(0),
       mHaveInputSurface(false),
       mHavePendingInputBuffers(false) {
+    if (uid == kNoUid) {
+        mUid = IPCThreadState::self()->getCallingUid();
+    } else {
+        mUid = uid;
+    }
+    initAnalyticsItem();
 }
 
 MediaCodec::~MediaCodec() {
     CHECK_EQ(mState, UNINITIALIZED);
     mResourceManagerService->removeResource(getId(mResourceManagerClient));
+
+    flushAnalyticsItem();
+}
+
+void MediaCodec::initAnalyticsItem() {
+    CHECK(mAnalyticsItem == NULL);
+    // set up our new record, get a sessionID, put it into the in-progress list
+    mAnalyticsItem = new MediaAnalyticsItem(kCodecKeyName);
+    if (mAnalyticsItem != NULL) {
+        (void) mAnalyticsItem->generateSessionID();
+        // don't record it yet; only at the end, when we have decided that we have
+        // data worth writing (e.g. .count() > 0)
+    }
+}
+
+void MediaCodec::flushAnalyticsItem() {
+    if (mAnalyticsItem != NULL) {
+        // don't log empty records
+        if (mAnalyticsItem->count() > 0) {
+            mAnalyticsItem->setFinalized(true);
+            mAnalyticsItem->selfrecord();
+        }
+        delete mAnalyticsItem;
+        mAnalyticsItem = NULL;
+    }
 }
 
 // static
@@ -319,7 +551,7 @@ void MediaCodec::PostReplyWithError(const sp<AReplyToken> &replyID, int32_t err)
 sp<CodecBase> MediaCodec::GetCodecBase(const AString &name, bool nameIsType) {
     // at this time only ACodec specifies a mime type.
     if (nameIsType || name.startsWithIgnoreCase("omx.")) {
-        return AVFactory::get()->createACodec();;
+        return new ACodec;
     } else if (name.startsWithIgnoreCase("android.filter.")) {
         return new MediaFilter;
     } else {
@@ -388,7 +620,13 @@ status_t MediaCodec::init(const AString &name, bool nameIsType, bool encoder) {
 
     mLooper->registerHandler(this);
 
-    mCodec->setNotificationMessage(new AMessage(kWhatCodecNotify, this));
+    mCodec->setCallback(
+            std::unique_ptr<CodecBase::CodecCallback>(
+                    new CodecCallback(new AMessage(kWhatCodecNotify, this))));
+    mBufferChannel = mCodec->getBufferChannel();
+    mBufferChannel->setCallback(
+            std::unique_ptr<CodecBase::BufferCallback>(
+                    new BufferCallback(new AMessage(kWhatCodecNotify, this))));
 
     sp<AMessage> msg = new AMessage(kWhatInit, this);
     msg->setString("name", name);
@@ -396,6 +634,18 @@ status_t MediaCodec::init(const AString &name, bool nameIsType, bool encoder) {
 
     if (nameIsType) {
         msg->setInt32("encoder", encoder);
+    }
+
+    if (mAnalyticsItem != NULL) {
+        if (nameIsType) {
+            // name is the mime type
+            mAnalyticsItem->setCString(kCodecMime, name.c_str());
+        } else {
+            mAnalyticsItem->setCString(kCodecCodec, name.c_str());
+        }
+        mAnalyticsItem->setCString(kCodecMode, mIsVideo ? "video" : "audio");
+        if (nameIsType)
+            mAnalyticsItem->setInt32(kCodecEncoder, encoder);
     }
 
     status_t err;
@@ -438,16 +688,50 @@ status_t MediaCodec::setOnFrameRenderedNotification(const sp<AMessage> &notify) 
 
 status_t MediaCodec::configure(
         const sp<AMessage> &format,
-        const sp<Surface> &surface,
+        const sp<Surface> &nativeWindow,
         const sp<ICrypto> &crypto,
         uint32_t flags) {
+    return configure(format, nativeWindow, crypto, NULL, flags);
+}
+
+status_t MediaCodec::configure(
+        const sp<AMessage> &format,
+        const sp<Surface> &surface,
+        const sp<ICrypto> &crypto,
+        const sp<IDescrambler> &descrambler,
+        uint32_t flags) {
     sp<AMessage> msg = new AMessage(kWhatConfigure, this);
+
+    if (mAnalyticsItem != NULL) {
+        int32_t profile = 0;
+        if (format->findInt32("profile", &profile)) {
+            mAnalyticsItem->setInt32(kCodecProfile, profile);
+        }
+        int32_t level = 0;
+        if (format->findInt32("level", &level)) {
+            mAnalyticsItem->setInt32(kCodecLevel, level);
+        }
+    }
 
     if (mIsVideo) {
         format->findInt32("width", &mVideoWidth);
         format->findInt32("height", &mVideoHeight);
         if (!format->findInt32("rotation-degrees", &mRotationDegrees)) {
             mRotationDegrees = 0;
+        }
+
+        if (mAnalyticsItem != NULL) {
+            mAnalyticsItem->setInt32(kCodecWidth, mVideoWidth);
+            mAnalyticsItem->setInt32(kCodecHeight, mVideoHeight);
+            mAnalyticsItem->setInt32(kCodecRotation, mRotationDegrees);
+            int32_t maxWidth = 0;
+            if (format->findInt32("max-width", &maxWidth)) {
+                mAnalyticsItem->setInt32(kCodecMaxWidth, maxWidth);
+            }
+            int32_t maxHeight = 0;
+            if (format->findInt32("max-height", &maxHeight)) {
+                mAnalyticsItem->setInt32(kCodecMaxHeight, maxHeight);
+            }
         }
 
         // Prevent possible integer overflow in downstream code.
@@ -462,8 +746,18 @@ status_t MediaCodec::configure(
     msg->setInt32("flags", flags);
     msg->setObject("surface", surface);
 
-    if (crypto != NULL) {
-        msg->setPointer("crypto", crypto.get());
+    if (crypto != NULL || descrambler != NULL) {
+        if (crypto != NULL) {
+            msg->setPointer("crypto", crypto.get());
+        } else {
+            msg->setPointer("descrambler", descrambler.get());
+        }
+        if (mAnalyticsItem != NULL) {
+            // XXX: save indication that it's crypto in some way...
+            mAnalyticsItem->setInt32(kCodecCrypto, 1);
+        }
+    } else if (mFlags & kFlagIsSecure) {
+        ALOGW("Crypto or descrambler should be given for secure codec");
     }
 
     // save msg for reset
@@ -504,6 +798,51 @@ status_t MediaCodec::configure(
         }
     }
     return err;
+}
+
+status_t MediaCodec::releaseCrypto()
+{
+    ALOGV("releaseCrypto");
+
+    sp<AMessage> msg = new AMessage(kWhatDrmReleaseCrypto, this);
+
+    sp<AMessage> response;
+    status_t status = msg->postAndAwaitResponse(&response);
+
+    if (status == OK && response != NULL) {
+        CHECK(response->findInt32("status", &status));
+        ALOGV("releaseCrypto ret: %d ", status);
+    }
+    else {
+        ALOGE("releaseCrypto err: %d", status);
+    }
+
+    return status;
+}
+
+void MediaCodec::onReleaseCrypto(const sp<AMessage>& msg)
+{
+    status_t status = INVALID_OPERATION;
+    if (mCrypto != NULL) {
+        ALOGV("onReleaseCrypto: mCrypto: %p (%d)", mCrypto.get(), mCrypto->getStrongCount());
+        mBufferChannel->setCrypto(NULL);
+        // TODO change to ALOGV
+        ALOGD("onReleaseCrypto: [before clear]  mCrypto: %p (%d)",
+                mCrypto.get(), mCrypto->getStrongCount());
+        mCrypto.clear();
+
+        status = OK;
+    }
+    else {
+        ALOGW("onReleaseCrypto: No mCrypto. err: %d", status);
+    }
+
+    sp<AMessage> response = new AMessage;
+    response->setInt32("status", status);
+
+    sp<AReplyToken> replyID;
+    CHECK(msg->senderAwaitsResponse(&replyID));
+    response->postReply(replyID);
 }
 
 status_t MediaCodec::setInputSurface(
@@ -615,14 +954,9 @@ status_t MediaCodec::stop() {
 }
 
 bool MediaCodec::hasPendingBuffer(int portIndex) {
-    const Vector<BufferInfo> &buffers = mPortBuffers[portIndex];
-    for (size_t i = 0; i < buffers.size(); ++i) {
-        const BufferInfo &info = buffers.itemAt(i);
-        if (info.mOwnedByClient) {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(
+            mPortBuffers[portIndex].begin(), mPortBuffers[portIndex].end(),
+            [](const BufferInfo &info) { return info.mOwnedByClient; });
 }
 
 bool MediaCodec::hasPendingBuffer() {
@@ -861,26 +1195,33 @@ status_t MediaCodec::getName(AString *name) const {
     return OK;
 }
 
-status_t MediaCodec::getWidevineLegacyBuffers(Vector<sp<ABuffer> > *buffers) const {
+status_t MediaCodec::getMetrics(MediaAnalyticsItem * &reply) {
+
+    reply = NULL;
+
+    // shouldn't happen, but be safe
+    if (mAnalyticsItem == NULL) {
+        return UNKNOWN_ERROR;
+    }
+
+    // XXX: go get current values for whatever in-flight data we want
+
+    // send it back to the caller.
+    reply = mAnalyticsItem->dup();
+
+    return OK;
+}
+
+status_t MediaCodec::getInputBuffers(Vector<sp<MediaCodecBuffer> > *buffers) const {
     sp<AMessage> msg = new AMessage(kWhatGetBuffers, this);
     msg->setInt32("portIndex", kPortIndexInput);
     msg->setPointer("buffers", buffers);
-    msg->setInt32("widevine", true);
 
     sp<AMessage> response;
     return PostAndAwaitResponse(msg, &response);
 }
 
-status_t MediaCodec::getInputBuffers(Vector<sp<ABuffer> > *buffers) const {
-    sp<AMessage> msg = new AMessage(kWhatGetBuffers, this);
-    msg->setInt32("portIndex", kPortIndexInput);
-    msg->setPointer("buffers", buffers);
-
-    sp<AMessage> response;
-    return PostAndAwaitResponse(msg, &response);
-}
-
-status_t MediaCodec::getOutputBuffers(Vector<sp<ABuffer> > *buffers) const {
+status_t MediaCodec::getOutputBuffers(Vector<sp<MediaCodecBuffer> > *buffers) const {
     sp<AMessage> msg = new AMessage(kWhatGetBuffers, this);
     msg->setInt32("portIndex", kPortIndexOutput);
     msg->setPointer("buffers", buffers);
@@ -889,17 +1230,17 @@ status_t MediaCodec::getOutputBuffers(Vector<sp<ABuffer> > *buffers) const {
     return PostAndAwaitResponse(msg, &response);
 }
 
-status_t MediaCodec::getOutputBuffer(size_t index, sp<ABuffer> *buffer) {
+status_t MediaCodec::getOutputBuffer(size_t index, sp<MediaCodecBuffer> *buffer) {
     sp<AMessage> format;
     return getBufferAndFormat(kPortIndexOutput, index, buffer, &format);
 }
 
 status_t MediaCodec::getOutputFormat(size_t index, sp<AMessage> *format) {
-    sp<ABuffer> buffer;
+    sp<MediaCodecBuffer> buffer;
     return getBufferAndFormat(kPortIndexOutput, index, &buffer, format);
 }
 
-status_t MediaCodec::getInputBuffer(size_t index, sp<ABuffer> *buffer) {
+status_t MediaCodec::getInputBuffer(size_t index, sp<MediaCodecBuffer> *buffer) {
     sp<AMessage> format;
     return getBufferAndFormat(kPortIndexInput, index, buffer, &format);
 }
@@ -910,7 +1251,7 @@ bool MediaCodec::isExecuting() const {
 
 status_t MediaCodec::getBufferAndFormat(
         size_t portIndex, size_t index,
-        sp<ABuffer> *buffer, sp<AMessage> *format) {
+        sp<MediaCodecBuffer> *buffer, sp<AMessage> *format) {
     // use mutex instead of a context switch
     if (mReleasedByResourceManager) {
         ALOGE("getBufferAndFormat - resource already released");
@@ -918,7 +1259,7 @@ status_t MediaCodec::getBufferAndFormat(
     }
 
     if (buffer == NULL) {
-        ALOGE("getBufferAndFormat - null ABuffer");
+        ALOGE("getBufferAndFormat - null MediaCodecBuffer");
         return INVALID_OPERATION;
     }
 
@@ -939,26 +1280,22 @@ status_t MediaCodec::getBufferAndFormat(
     // we also don't want mOwnedByClient to change during this
     Mutex::Autolock al(mBufferLock);
 
-    Vector<BufferInfo> *buffers = &mPortBuffers[portIndex];
-    if (index >= buffers->size()) {
+    std::vector<BufferInfo> &buffers = mPortBuffers[portIndex];
+    if (index >= buffers.size()) {
         ALOGE("getBufferAndFormat - trying to get buffer with "
-              "bad index (index=%zu buffer_size=%zu)", index, buffers->size());
+              "bad index (index=%zu buffer_size=%zu)", index, buffers.size());
         return INVALID_OPERATION;
     }
 
-    const BufferInfo &info = buffers->itemAt(index);
+    const BufferInfo &info = buffers[index];
     if (!info.mOwnedByClient) {
         ALOGE("getBufferAndFormat - invalid operation "
               "(the index %zu is not owned by client)", index);
         return INVALID_OPERATION;
     }
 
-    // by the time buffers array is initialized, crypto is set
-    *buffer = (portIndex == kPortIndexInput && mCrypto != NULL) ?
-                  info.mEncryptedData :
-                  info.mData;
-
-    *format = info.mFormat;
+    *buffer = info.mData;
+    *format = info.mData->format();
 
     return OK;
 }
@@ -1047,8 +1384,8 @@ bool MediaCodec::handleDequeueOutputBuffer(const sp<AReplyToken> &replyID, bool 
             return false;
         }
 
-        const sp<ABuffer> &buffer =
-            mPortBuffers[kPortIndexOutput].itemAt(index).mData;
+        const sp<MediaCodecBuffer> &buffer =
+            mPortBuffers[kPortIndexOutput][index].mData;
 
         response->setSize("index", index);
         response->setSize("offset", buffer->offset());
@@ -1059,25 +1396,8 @@ bool MediaCodec::handleDequeueOutputBuffer(const sp<AReplyToken> &replyID, bool 
 
         response->setInt64("timeUs", timeUs);
 
-        int32_t omxFlags;
-        CHECK(buffer->meta()->findInt32("omxFlags", &omxFlags));
-
-        uint32_t flags = 0;
-        if (omxFlags & OMX_BUFFERFLAG_SYNCFRAME) {
-            flags |= BUFFER_FLAG_SYNCFRAME;
-        }
-        if (omxFlags & OMX_BUFFERFLAG_CODECCONFIG) {
-            flags |= BUFFER_FLAG_CODECCONFIG;
-        }
-        if (omxFlags & OMX_BUFFERFLAG_EOS) {
-            flags |= BUFFER_FLAG_EOS;
-        }
-        if (omxFlags & OMX_BUFFERFLAG_EXTRADATA) {
-            flags |= BUFFER_FLAG_EXTRADATA;
-        }
-        if (omxFlags & OMX_BUFFERFLAG_DATACORRUPT) {
-            flags |= BUFFER_FLAG_DATACORRUPT;
-        }
+        int32_t flags;
+        CHECK(buffer->meta()->findInt32("flags", &flags));
 
         response->setInt32("flags", flags);
         response->postReply(replyID);
@@ -1094,7 +1414,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             CHECK(msg->findInt32("what", &what));
 
             switch (what) {
-                case CodecBase::kWhatError:
+                case kWhatError:
                 {
                     int32_t err, actionCode;
                     CHECK(msg->findInt32("err", &err));
@@ -1118,6 +1438,12 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
 
                         case CONFIGURING:
                         {
+                            if (actionCode == ACTION_CODE_FATAL) {
+                                mAnalyticsItem->setInt32(kCodecError, err);
+                                mAnalyticsItem->setInt32(kCodecErrorState, mState);
+                                flushAnalyticsItem();
+                                initAnalyticsItem();
+                            }
                             setState(actionCode == ACTION_CODE_FATAL ?
                                     UNINITIALIZED : INITIALIZED);
                             break;
@@ -1125,19 +1451,27 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
 
                         case STARTING:
                         {
+                            if (actionCode == ACTION_CODE_FATAL) {
+                                mAnalyticsItem->setInt32(kCodecError, err);
+                                mAnalyticsItem->setInt32(kCodecErrorState, mState);
+                                flushAnalyticsItem();
+                                initAnalyticsItem();
+                            }
                             setState(actionCode == ACTION_CODE_FATAL ?
                                     UNINITIALIZED : CONFIGURED);
                             break;
                         }
 
-                        case STOPPING:
                         case RELEASING:
                         {
                             // Ignore the error, assuming we'll still get
-                            // the shutdown complete notification.
-
+                            // the shutdown complete notification. If we
+                            // don't, we'll timeout and force release.
                             sendErrorResponse = false;
-
+                        }
+                        // fall-thru
+                        case STOPPING:
+                        {
                             if (mFlags & kFlagSawMediaServerDie) {
                                 // MediaServer died, there definitely won't
                                 // be a shutdown complete notification after
@@ -1151,6 +1485,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                                     mComponentName.clear();
                                 }
                                 (new AMessage)->postReply(mReplyID);
+                                sendErrorResponse = false;
                             }
                             break;
                         }
@@ -1158,6 +1493,11 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         case FLUSHING:
                         {
                             if (actionCode == ACTION_CODE_FATAL) {
+                                mAnalyticsItem->setInt32(kCodecError, err);
+                                mAnalyticsItem->setInt32(kCodecErrorState, mState);
+                                flushAnalyticsItem();
+                                initAnalyticsItem();
+
                                 setState(UNINITIALIZED);
                             } else {
                                 setState(
@@ -1186,6 +1526,10 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                                 setState(INITIALIZED);
                                 break;
                             default:
+                                mAnalyticsItem->setInt32(kCodecError, err);
+                                mAnalyticsItem->setInt32(kCodecErrorState, mState);
+                                flushAnalyticsItem();
+                                initAnalyticsItem();
                                 setState(UNINITIALIZED);
                                 break;
                             }
@@ -1226,7 +1570,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatComponentAllocated:
+                case kWhatComponentAllocated:
                 {
                     CHECK_EQ(mState, INITIALIZING);
                     setState(INITIALIZED);
@@ -1234,8 +1578,11 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
 
                     CHECK(msg->findString("componentName", &mComponentName));
 
-                    if (mComponentName.startsWith("OMX.google.") ||
-                            mComponentName.startsWith("OMX.ffmpeg.")) {
+                    if (mComponentName.c_str()) {
+                        mAnalyticsItem->setCString(kCodecCodec, mComponentName.c_str());
+                    }
+
+                    if (mComponentName.startsWith("OMX.google.")) {
                         mFlags |= kFlagUsesSoftwareRenderer;
                     } else {
                         mFlags &= ~kFlagUsesSoftwareRenderer;
@@ -1245,9 +1592,11 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     if (mComponentName.endsWith(".secure")) {
                         mFlags |= kFlagIsSecure;
                         resourceType = MediaResource::kSecureCodec;
+                        mAnalyticsItem->setInt32(kCodecSecure, 1);
                     } else {
                         mFlags &= ~kFlagIsSecure;
                         resourceType = MediaResource::kNonSecureCodec;
+                        mAnalyticsItem->setInt32(kCodecSecure, 0);
                     }
 
                     if (mIsVideo) {
@@ -1259,7 +1608,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatComponentConfigured:
+                case kWhatComponentConfigured:
                 {
                     if (mState == UNINITIALIZED || mState == INITIALIZED) {
                         // In case a kWhatError message came in and replied with error,
@@ -1272,7 +1621,6 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     // reset input surface flag
                     mHaveInputSurface = false;
 
-                    CHECK(msg->findString("componentName", &mComponentName));
                     CHECK(msg->findMessage("input-format", &mInputFormat));
                     CHECK(msg->findMessage("output-format", &mOutputFormat));
                     ALOGV("[%s] configured as input format: %s, output format: %s",
@@ -1286,10 +1634,23 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     }
                     setState(CONFIGURED);
                     (new AMessage)->postReply(mReplyID);
+
+                    // augment our media metrics info, now that we know more things
+                    if (mAnalyticsItem != NULL) {
+                        sp<AMessage> format;
+                        if (mConfigureMsg != NULL &&
+                            mConfigureMsg->findMessage("format", &format)) {
+                                // format includes: mime
+                                AString mime;
+                                if (format->findString("mime", &mime)) {
+                                    mAnalyticsItem->setCString(kCodecMime, mime.c_str());
+                                }
+                            }
+                    }
                     break;
                 }
 
-                case CodecBase::kWhatInputSurfaceCreated:
+                case kWhatInputSurfaceCreated:
                 {
                     // response to initiateCreateInputSurface()
                     status_t err = NO_ERROR;
@@ -1313,12 +1674,14 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatInputSurfaceAccepted:
+                case kWhatInputSurfaceAccepted:
                 {
                     // response to initiateSetInputSurface()
                     status_t err = NO_ERROR;
                     sp<AMessage> response = new AMessage();
                     if (!msg->findInt32("err", &err)) {
+                        CHECK(msg->findMessage("input-format", &mInputFormat));
+                        CHECK(msg->findMessage("output-format", &mOutputFormat));
                         mHaveInputSurface = true;
                     } else {
                         response->setInt32("err", err);
@@ -1327,7 +1690,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatSignaledInputEOS:
+                case kWhatSignaledInputEOS:
                 {
                     // response to signalEndOfInputStream()
                     sp<AMessage> response = new AMessage;
@@ -1339,138 +1702,28 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-
-                case CodecBase::kWhatBuffersAllocated:
+                case kWhatStartCompleted:
                 {
-                    Mutex::Autolock al(mBufferLock);
-                    int32_t portIndex;
-                    CHECK(msg->findInt32("portIndex", &portIndex));
-
-                    ALOGV("%s buffers allocated",
-                          portIndex == kPortIndexInput ? "input" : "output");
-
-                    CHECK(portIndex == kPortIndexInput
-                            || portIndex == kPortIndexOutput);
-
-                    mPortBuffers[portIndex].clear();
-
-                    Vector<BufferInfo> *buffers = &mPortBuffers[portIndex];
-
-                    sp<RefBase> obj;
-                    CHECK(msg->findObject("portDesc", &obj));
-
-                    sp<CodecBase::PortDescription> portDesc =
-                        static_cast<CodecBase::PortDescription *>(obj.get());
-
-                    size_t numBuffers = portDesc->countBuffers();
-
-                    size_t totalSize = 0;
-                    for (size_t i = 0; i < numBuffers; ++i) {
-                        if (portIndex == kPortIndexInput && mCrypto != NULL) {
-                            totalSize += portDesc->bufferAt(i)->capacity();
-                        }
+                    CHECK_EQ(mState, STARTING);
+                    if (mIsVideo) {
+                        addResource(
+                                MediaResource::kGraphicMemory,
+                                MediaResource::kUnspecifiedSubType,
+                                getGraphicBufferSize());
                     }
-
-                    if (totalSize) {
-                        mDealer = new MemoryDealer(totalSize, "MediaCodec");
-                    }
-
-                    for (size_t i = 0; i < numBuffers; ++i) {
-                        BufferInfo info;
-                        info.mBufferID = portDesc->bufferIDAt(i);
-                        info.mOwnedByClient = false;
-                        info.mData = portDesc->bufferAt(i);
-                        info.mNativeHandle = portDesc->handleAt(i);
-                        info.mMemRef = portDesc->memRefAt(i);
-
-                        if (portIndex == kPortIndexInput && mCrypto != NULL) {
-                            sp<IMemory> mem = mDealer->allocate(info.mData->capacity());
-                            info.mEncryptedData =
-                                new ABuffer(mem->pointer(), info.mData->capacity());
-                            info.mSharedEncryptedBuffer = mem;
-                        }
-
-                        buffers->push_back(info);
-                    }
-
-                    if (portIndex == kPortIndexOutput) {
-                        if (mState == STARTING) {
-                            // We're always allocating output buffers after
-                            // allocating input buffers, so this is a good
-                            // indication that now all buffers are allocated.
-                            if (mIsVideo) {
-                                addResource(
-                                        MediaResource::kGraphicMemory,
-                                        MediaResource::kUnspecifiedSubType,
-                                        getGraphicBufferSize());
-                            }
-                            setState(STARTED);
-                            (new AMessage)->postReply(mReplyID);
-                        } else {
-                            mFlags |= kFlagOutputBuffersChanged;
-                            postActivityNotificationIfPossible();
-                        }
-                    }
+                    setState(STARTED);
+                    (new AMessage)->postReply(mReplyID);
                     break;
                 }
 
-                case CodecBase::kWhatOutputFormatChanged:
+                case kWhatOutputBuffersChanged:
                 {
-                    CHECK(msg->findMessage("format", &mOutputFormat));
-
-                    ALOGV("[%s] output format changed to: %s",
-                            mComponentName.c_str(), mOutputFormat->debugString(4).c_str());
-
-                    if (mSoftRenderer == NULL &&
-                            mSurface != NULL &&
-                            (mFlags & kFlagUsesSoftwareRenderer)) {
-                        AString mime;
-                        CHECK(mOutputFormat->findString("mime", &mime));
-
-                        // TODO: propagate color aspects to software renderer to allow better
-                        // color conversion to RGB. For now, just mark dataspace for YUV
-                        // rendering.
-                        int32_t dataSpace;
-                        if (mOutputFormat->findInt32("android._dataspace", &dataSpace)) {
-                            ALOGD("[%s] setting dataspace on output surface to #%x",
-                                    mComponentName.c_str(), dataSpace);
-                            int err = native_window_set_buffers_data_space(
-                                    mSurface.get(), (android_dataspace)dataSpace);
-                            ALOGW_IF(err != 0, "failed to set dataspace on surface (%d)", err);
-                        }
-
-                        if (mime.startsWithIgnoreCase("video/")) {
-                            mSoftRenderer = new SoftwareRenderer(mSurface, mRotationDegrees);
-                        }
-                    }
-
-                    if (mFlags & kFlagIsEncoder) {
-                        // Before we announce the format change we should
-                        // collect codec specific data and amend the output
-                        // format as necessary.
-                        mFlags |= kFlagGatherCodecSpecificData;
-                    } else if (mFlags & kFlagIsAsync) {
-                        onOutputFormatChanged();
-                    } else {
-                        mFlags |= kFlagOutputFormatChanged;
-                        postActivityNotificationIfPossible();
-                    }
-
-                    // Notify mCrypto of video resolution changes
-                    if (mCrypto != NULL) {
-                        int32_t left, top, right, bottom, width, height;
-                        if (mOutputFormat->findRect("crop", &left, &top, &right, &bottom)) {
-                            mCrypto->notifyResolution(right - left + 1, bottom - top + 1);
-                        } else if (mOutputFormat->findInt32("width", &width)
-                                && mOutputFormat->findInt32("height", &height)) {
-                            mCrypto->notifyResolution(width, height);
-                        }
-                    }
-
+                    mFlags |= kFlagOutputBuffersChanged;
+                    postActivityNotificationIfPossible();
                     break;
                 }
 
-                case CodecBase::kWhatOutputFramesRendered:
+                case kWhatOutputFramesRendered:
                 {
                     // ignore these in all states except running, and check that we have a
                     // notification set
@@ -1482,7 +1735,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatFillThisBuffer:
+                case kWhatFillThisBuffer:
                 {
                     /* size_t index = */updateBuffers(kPortIndexInput, msg);
 
@@ -1537,7 +1790,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatDrainThisBuffer:
+                case kWhatDrainThisBuffer:
                 {
                     /* size_t index = */updateBuffers(kPortIndexOutput, msg);
 
@@ -1548,34 +1801,71 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         break;
                     }
 
-                    sp<ABuffer> buffer;
-                    CHECK(msg->findBuffer("buffer", &buffer));
+                    sp<RefBase> obj;
+                    CHECK(msg->findObject("buffer", &obj));
+                    sp<MediaCodecBuffer> buffer = static_cast<MediaCodecBuffer *>(obj.get());
 
-                    int32_t omxFlags;
-                    CHECK(msg->findInt32("flags", &omxFlags));
+                    if (mOutputFormat != buffer->format()) {
+                        mOutputFormat = buffer->format();
+                        ALOGV("[%s] output format changed to: %s",
+                                mComponentName.c_str(), mOutputFormat->debugString(4).c_str());
 
-                    buffer->meta()->setInt32("omxFlags", omxFlags);
+                        if (mSoftRenderer == NULL &&
+                                mSurface != NULL &&
+                                (mFlags & kFlagUsesSoftwareRenderer)) {
+                            AString mime;
+                            CHECK(mOutputFormat->findString("mime", &mime));
 
-                    if (mFlags & kFlagGatherCodecSpecificData) {
-                        // This is the very first output buffer after a
-                        // format change was signalled, it'll either contain
-                        // the one piece of codec specific data we can expect
-                        // or there won't be codec specific data.
-                        if (omxFlags & OMX_BUFFERFLAG_CODECCONFIG) {
-                            status_t err =
-                                amendOutputFormatWithCodecSpecificData(buffer);
+                            // TODO: propagate color aspects to software renderer to allow better
+                            // color conversion to RGB. For now, just mark dataspace for YUV
+                            // rendering.
+                            int32_t dataSpace;
+                            if (mOutputFormat->findInt32("android._dataspace", &dataSpace)) {
+                                ALOGD("[%s] setting dataspace on output surface to #%x",
+                                        mComponentName.c_str(), dataSpace);
+                                int err = native_window_set_buffers_data_space(
+                                        mSurface.get(), (android_dataspace)dataSpace);
+                                ALOGW_IF(err != 0, "failed to set dataspace on surface (%d)", err);
+                            }
 
-                            if (err != OK) {
-                                ALOGE("Codec spit out malformed codec "
-                                      "specific data!");
+                            if (mime.startsWithIgnoreCase("video/")) {
+                                mSoftRenderer = new SoftwareRenderer(mSurface, mRotationDegrees);
                             }
                         }
 
-                        mFlags &= ~kFlagGatherCodecSpecificData;
+                        if (mFlags & kFlagIsEncoder) {
+                            // Before we announce the format change we should
+                            // collect codec specific data and amend the output
+                            // format as necessary.
+                            int32_t flags = 0;
+                            (void) buffer->meta()->findInt32("flags", &flags);
+                            if (flags & BUFFER_FLAG_CODECCONFIG) {
+                                status_t err =
+                                    amendOutputFormatWithCodecSpecificData(buffer);
+
+                                if (err != OK) {
+                                    ALOGE("Codec spit out malformed codec "
+                                          "specific data!");
+                                }
+                            }
+                        }
+
                         if (mFlags & kFlagIsAsync) {
                             onOutputFormatChanged();
                         } else {
                             mFlags |= kFlagOutputFormatChanged;
+                            postActivityNotificationIfPossible();
+                        }
+
+                        // Notify mCrypto of video resolution changes
+                        if (mCrypto != NULL) {
+                            int32_t left, top, right, bottom, width, height;
+                            if (mOutputFormat->findRect("crop", &left, &top, &right, &bottom)) {
+                                mCrypto->notifyResolution(right - left + 1, bottom - top + 1);
+                            } else if (mOutputFormat->findInt32("width", &width)
+                                    && mOutputFormat->findInt32("height", &height)) {
+                                mCrypto->notifyResolution(width, height);
+                            }
                         }
                     }
 
@@ -1594,22 +1884,33 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatEOS:
+                case kWhatEOS:
                 {
                     // We already notify the client of this by using the
                     // corresponding flag in "onOutputBufferReady".
                     break;
                 }
 
-                case CodecBase::kWhatShutdownCompleted:
+                case kWhatStopCompleted:
                 {
-                    if (mState == STOPPING) {
-                        setState(INITIALIZED);
-                    } else {
-                        CHECK_EQ(mState, RELEASING);
-                        setState(UNINITIALIZED);
-                        mComponentName.clear();
+                    if (mState != STOPPING) {
+                        ALOGW("Received kWhatStopCompleted in state %d", mState);
+                        break;
                     }
+                    setState(INITIALIZED);
+                    (new AMessage)->postReply(mReplyID);
+                    break;
+                }
+
+                case kWhatReleaseCompleted:
+                {
+                    if (mState != RELEASING) {
+                        ALOGW("Received kWhatReleaseCompleted in state %d", mState);
+                        break;
+                    }
+                    setState(UNINITIALIZED);
+                    mComponentName.clear();
+
                     mFlags &= ~kFlagIsComponentAllocated;
 
                     mResourceManagerService->removeResource(getId(mResourceManagerClient));
@@ -1618,7 +1919,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     break;
                 }
 
-                case CodecBase::kWhatFlushCompleted:
+                case kWhatFlushCompleted:
                 {
                     if (mState != FLUSHING) {
                         ALOGW("received FlushCompleted message in state %d",
@@ -1760,7 +2061,22 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                 crypto = NULL;
             }
 
+            ALOGV("kWhatConfigure: Old mCrypto: %p (%d)",
+                    mCrypto.get(), (mCrypto != NULL ? mCrypto->getStrongCount() : 0));
+
             mCrypto = static_cast<ICrypto *>(crypto);
+            mBufferChannel->setCrypto(mCrypto);
+
+            ALOGV("kWhatConfigure: New mCrypto: %p (%d)",
+                    mCrypto.get(), (mCrypto != NULL ? mCrypto->getStrongCount() : 0));
+
+            void *descrambler;
+            if (!msg->findPointer("descrambler", &descrambler)) {
+                descrambler = NULL;
+            }
+
+            mDescrambler = static_cast<IDescrambler *>(descrambler);
+            mBufferChannel->setDescrambler(mDescrambler);
 
             uint32_t flags;
             CHECK(msg->findInt32("flags", (int32_t *)&flags));
@@ -1782,7 +2098,6 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             CHECK(msg->senderAwaitsResponse(&replyID));
 
             status_t err = OK;
-            sp<Surface> surface;
 
             switch (mState) {
                 case CONFIGURED:
@@ -1924,7 +2239,9 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                 }
             }
 
-            if (!((mFlags & kFlagIsComponentAllocated) && targetState == UNINITIALIZED) // See 1
+            bool isReleasingAllocatedComponent =
+                    (mFlags & kFlagIsComponentAllocated) && targetState == UNINITIALIZED;
+            if (!isReleasingAllocatedComponent // See 1
                     && mState != INITIALIZED
                     && mState != CONFIGURED && !isExecuting()) {
                 // 1) Permit release to shut down the component if allocated.
@@ -1948,6 +2265,14 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                 break;
             }
 
+            // If we're flushing, or we're stopping but received a release
+            // request, post the reply for the pending call first, and consider
+            // it done. The reply token will be replaced after this, and we'll
+            // no longer be able to reply.
+            if (mState == FLUSHING || mState == STOPPING) {
+                (new AMessage)->postReply(mReplyID);
+            }
+
             if (mFlags & kFlagSawMediaServerDie) {
                 // It's dead, Jim. Don't expect initiateShutdown to yield
                 // any useful results now...
@@ -1956,6 +2281,15 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     mComponentName.clear();
                 }
                 (new AMessage)->postReply(replyID);
+                break;
+            }
+
+            // If we already have an error, component may not be able to
+            // complete the shutdown properly. If we're stopping, post the
+            // reply now with an error to unblock the client, client can
+            // release after the failure (instead of ANR).
+            if (msg->what() == kWhatStop && (mFlags & kFlagStickyError)) {
+                PostReplyWithError(replyID, getStickyError());
                 break;
             }
 
@@ -1970,6 +2304,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             if (mSoftRenderer != NULL && (mFlags & kFlagPushBlankBuffersOnShutdown)) {
                 pushBlankBuffersToNativeWindow(mSurface.get());
             }
+
             break;
         }
 
@@ -2132,7 +2467,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             sp<AReplyToken> replyID;
             CHECK(msg->senderAwaitsResponse(&replyID));
 
-            if (!isExecuting()) {
+            if (!isExecuting() || !mHaveInputSurface) {
                 PostReplyWithError(replyID, INVALID_OPERATION);
                 break;
             } else if (mFlags & kFlagStickyError) {
@@ -2149,12 +2484,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
         {
             sp<AReplyToken> replyID;
             CHECK(msg->senderAwaitsResponse(&replyID));
-            // Unfortunately widevine legacy source requires knowing all of the
-            // codec input buffers, so we have to provide them even in async mode.
-            int32_t widevine = 0;
-            msg->findInt32("widevine", &widevine);
-
-            if (!isExecuting() || ((mFlags & kFlagIsAsync) && !widevine)) {
+            if (!isExecuting() || (mFlags & kFlagIsAsync)) {
                 PostReplyWithError(replyID, INVALID_OPERATION);
                 break;
             } else if (mFlags & kFlagStickyError) {
@@ -2165,7 +2495,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             int32_t portIndex;
             CHECK(msg->findInt32("portIndex", &portIndex));
 
-            Vector<sp<ABuffer> > *dstBuffers;
+            Vector<sp<MediaCodecBuffer> > *dstBuffers;
             CHECK(msg->findPointer("buffers", (void **)&dstBuffers));
 
             dstBuffers->clear();
@@ -2173,14 +2503,10 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             // createInputSurface(), or persistent set by setInputSurface()),
             // give the client an empty input buffers array.
             if (portIndex != kPortIndexInput || !mHaveInputSurface) {
-                const Vector<BufferInfo> &srcBuffers = mPortBuffers[portIndex];
-
-                for (size_t i = 0; i < srcBuffers.size(); ++i) {
-                    const BufferInfo &info = srcBuffers.itemAt(i);
-
-                    dstBuffers->push_back(
-                            (portIndex == kPortIndexInput && mCrypto != NULL)
-                                    ? info.mEncryptedData : info.mData);
+                if (portIndex == kPortIndexInput) {
+                    mBufferChannel->getInputBufferArray(dstBuffers);
+                } else {
+                    mBufferChannel->getOutputBufferArray(dstBuffers);
                 }
             }
 
@@ -2281,6 +2607,12 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             break;
         }
 
+        case kWhatDrmReleaseCrypto:
+        {
+            onReleaseCrypto(msg);
+            break;
+        }
+
         default:
             TRESPASS();
     }
@@ -2309,16 +2641,18 @@ void MediaCodec::extractCSD(const sp<AMessage> &format) {
 status_t MediaCodec::queueCSDInputBuffer(size_t bufferIndex) {
     CHECK(!mCSD.empty());
 
-    const BufferInfo *info =
-        &mPortBuffers[kPortIndexInput].itemAt(bufferIndex);
+    const BufferInfo &info = mPortBuffers[kPortIndexInput][bufferIndex];
 
     sp<ABuffer> csd = *mCSD.begin();
     mCSD.erase(mCSD.begin());
 
-    const sp<ABuffer> &codecInputData =
-        (mCrypto != NULL) ? info->mEncryptedData : info->mData;
+    const sp<MediaCodecBuffer> &codecInputData = info.mData;
 
     if (csd->size() > codecInputData->capacity()) {
+        return -EINVAL;
+    }
+    if (codecInputData->data() == NULL) {
+        ALOGV("Input buffer %zu is not properly allocated", bufferIndex);
         return -EINVAL;
     }
 
@@ -2342,7 +2676,12 @@ void MediaCodec::setState(State newState) {
         delete mSoftRenderer;
         mSoftRenderer = NULL;
 
+        if ( mCrypto != NULL ) {
+            ALOGV("setState: ~mCrypto: %p (%d)",
+                    mCrypto.get(), (mCrypto != NULL ? mCrypto->getStrongCount() : 0));
+        }
         mCrypto.clear();
+        mDescrambler.clear();
         handleSetSurface(NULL);
 
         mInputFormat.clear();
@@ -2351,7 +2690,6 @@ void MediaCodec::setState(State newState) {
         mFlags &= ~kFlagOutputBuffersChanged;
         mFlags &= ~kFlagStickyError;
         mFlags &= ~kFlagIsEncoder;
-        mFlags &= ~kFlagGatherCodecSpecificData;
         mFlags &= ~kFlagIsAsync;
         mStickyError = OK;
 
@@ -2385,27 +2723,19 @@ void MediaCodec::returnBuffersToCodecOnPort(int32_t portIndex, bool isReclaim) {
     CHECK(portIndex == kPortIndexInput || portIndex == kPortIndexOutput);
     Mutex::Autolock al(mBufferLock);
 
-    Vector<BufferInfo> *buffers = &mPortBuffers[portIndex];
+    for (size_t i = 0; i < mPortBuffers[portIndex].size(); ++i) {
+        BufferInfo *info = &mPortBuffers[portIndex][i];
 
-    for (size_t i = 0; i < buffers->size(); ++i) {
-        BufferInfo *info = &buffers->editItemAt(i);
-
-        if (info->mNotify != NULL) {
-            sp<AMessage> msg = info->mNotify;
-            info->mNotify = NULL;
+        if (info->mData != nullptr) {
+            sp<MediaCodecBuffer> buffer = info->mData;
             if (isReclaim && info->mOwnedByClient) {
                 ALOGD("port %d buffer %zu still owned by client when codec is reclaimed",
                         portIndex, i);
             } else {
-                info->mMemRef = NULL;
                 info->mOwnedByClient = false;
+                info->mData.clear();
             }
-
-            if (portIndex == kPortIndexInput) {
-                /* no error, just returning buffers */
-                msg->setInt32("err", OK);
-            }
-            msg->post();
+            mBufferChannel->discardBuffer(buffer);
         }
     }
 
@@ -2415,31 +2745,22 @@ void MediaCodec::returnBuffersToCodecOnPort(int32_t portIndex, bool isReclaim) {
 size_t MediaCodec::updateBuffers(
         int32_t portIndex, const sp<AMessage> &msg) {
     CHECK(portIndex == kPortIndexInput || portIndex == kPortIndexOutput);
+    size_t index;
+    CHECK(msg->findSize("index", &index));
+    sp<RefBase> obj;
+    CHECK(msg->findObject("buffer", &obj));
+    sp<MediaCodecBuffer> buffer = static_cast<MediaCodecBuffer *>(obj.get());
 
-    uint32_t bufferID;
-    CHECK(msg->findInt32("buffer-id", (int32_t*)&bufferID));
-    Mutex::Autolock al(mBufferLock);
-
-    Vector<BufferInfo> *buffers = &mPortBuffers[portIndex];
-
-    for (size_t i = 0; i < buffers->size(); ++i) {
-        BufferInfo *info = &buffers->editItemAt(i);
-
-        if (info->mBufferID == bufferID) {
-            CHECK(info->mNotify == NULL);
-            CHECK(msg->findMessage("reply", &info->mNotify));
-
-            info->mFormat =
-                (portIndex == kPortIndexInput) ? mInputFormat : mOutputFormat;
-            mAvailPortBuffers[portIndex].push_back(i);
-
-            return i;
+    {
+        Mutex::Autolock al(mBufferLock);
+        if (mPortBuffers[portIndex].size() <= index) {
+            mPortBuffers[portIndex].resize(align(index + 1, kNumBuffersAlign));
         }
+        mPortBuffers[portIndex][index].mData = buffer;
     }
+    mAvailPortBuffers[portIndex].push_back(index);
 
-    TRESPASS();
-
-    return 0;
+    return index;
 }
 
 status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
@@ -2465,7 +2786,7 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
     CryptoPlugin::Pattern pattern;
 
     if (msg->findSize("size", &size)) {
-        if (mCrypto != NULL) {
+        if (hasCryptoOrDescrambler()) {
             ss.mNumBytesOfClearData = size;
             ss.mNumBytesOfEncryptedData = 0;
 
@@ -2477,7 +2798,9 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
             pattern.mSkipBlocks = 0;
         }
     } else {
-        if (mCrypto == NULL) {
+        if (!hasCryptoOrDescrambler()) {
+            ALOGE("[%s] queuing secure buffer without mCrypto or mDescrambler!",
+                    mComponentName.c_str());
             return -EINVAL;
         }
 
@@ -2504,25 +2827,18 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         return -ERANGE;
     }
 
-    BufferInfo *info = &mPortBuffers[kPortIndexInput].editItemAt(index);
+    BufferInfo *info = &mPortBuffers[kPortIndexInput][index];
 
-    if (info->mNotify == NULL || !info->mOwnedByClient) {
+    if (info->mData == nullptr || !info->mOwnedByClient) {
         return -EACCES;
     }
 
     if (offset + size > info->mData->capacity()) {
-        if ( ((int)size < 0) && !(flags & BUFFER_FLAG_EOS)) {
-            size = 0;
-            ALOGD("EOS, reset size to zero");
-        } else {
-            return -EINVAL;
-        }
+        return -EINVAL;
     }
 
-    sp<AMessage> reply = info->mNotify;
     info->mData->setRange(offset, size);
     info->mData->meta()->setInt64("timeUs", timeUs);
-
     if (flags & BUFFER_FLAG_EOS) {
         info->mData->meta()->setInt32("eos", true);
     }
@@ -2531,60 +2847,42 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         info->mData->meta()->setInt32("csd", true);
     }
 
-    if (mCrypto != NULL) {
-        if (size > info->mEncryptedData->capacity()) {
-            return -ERANGE;
-        }
-
+    sp<MediaCodecBuffer> buffer = info->mData;
+    status_t err = OK;
+    if (hasCryptoOrDescrambler()) {
         AString *errorDetailMsg;
         CHECK(msg->findPointer("errorDetailMsg", (void **)&errorDetailMsg));
 
-        void *dst_pointer = info->mData->base();
-        ICrypto::DestinationType dst_type = ICrypto::kDestinationTypeOpaqueHandle;
-
-        if (info->mNativeHandle != NULL) {
-            dst_pointer = (void *)info->mNativeHandle->handle();
-            dst_type = ICrypto::kDestinationTypeNativeHandle;
-        } else if ((mFlags & kFlagIsSecure) == 0) {
-            dst_type = ICrypto::kDestinationTypeVmPointer;
-        }
-
-        ssize_t result = mCrypto->decrypt(
-                dst_type,
+        err = mBufferChannel->queueSecureInputBuffer(
+                buffer,
+                (mFlags & kFlagIsSecure),
                 key,
                 iv,
                 mode,
                 pattern,
-                info->mSharedEncryptedBuffer,
-                offset,
                 subSamples,
                 numSubSamples,
-                dst_pointer,
                 errorDetailMsg);
-
-        if (result < 0) {
-            return result;
-        }
-
-        info->mData->setRange(0, result);
+    } else {
+        err = mBufferChannel->queueInputBuffer(buffer);
     }
 
-    // synchronization boundary for getBufferAndFormat
-    {
+    if (err == OK) {
+        // synchronization boundary for getBufferAndFormat
         Mutex::Autolock al(mBufferLock);
         info->mOwnedByClient = false;
+        info->mData.clear();
+        if (mAnalyticsItem != NULL) {
+            mAnalyticsItem->addInt64(kCodecBytesIn, size);
+        }
     }
-    reply->setBuffer("buffer", info->mData);
-    reply->post();
 
-    info->mNotify = NULL;
-
-    return OK;
+    return err;
 }
 
 //static
 size_t MediaCodec::CreateFramesRenderedMessage(
-        std::list<FrameRenderTracker::Info> done, sp<AMessage> &msg) {
+        const std::list<FrameRenderTracker::Info> &done, sp<AMessage> &msg) {
     size_t index = 0;
 
     for (std::list<FrameRenderTracker::Info>::const_iterator it = done.cbegin();
@@ -2616,23 +2914,24 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
         return -ERANGE;
     }
 
-    BufferInfo *info = &mPortBuffers[kPortIndexOutput].editItemAt(index);
+    BufferInfo *info = &mPortBuffers[kPortIndexOutput][index];
 
-    if (info->mNotify == NULL || !info->mOwnedByClient) {
+    if (info->mData == nullptr || !info->mOwnedByClient) {
         return -EACCES;
     }
 
     // synchronization boundary for getBufferAndFormat
+    sp<MediaCodecBuffer> buffer;
     {
         Mutex::Autolock al(mBufferLock);
         info->mOwnedByClient = false;
+        buffer = info->mData;
+        info->mData.clear();
     }
 
-    if (render && info->mData != NULL && info->mData->size() != 0) {
-        info->mNotify->setInt32("render", true);
-
+    if (render && buffer->size() != 0) {
         int64_t mediaTimeUs = -1;
-        info->mData->meta()->findInt64("timeUs", &mediaTimeUs);
+        buffer->meta()->findInt64("timeUs", &mediaTimeUs);
 
         int64_t renderTimeNs = 0;
         if (!msg->findInt64("timestampNs", &renderTimeNs)) {
@@ -2640,12 +2939,11 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
             ALOGV("using buffer PTS of %lld", (long long)mediaTimeUs);
             renderTimeNs = mediaTimeUs * 1000;
         }
-        info->mNotify->setInt64("timestampNs", renderTimeNs);
 
         if (mSoftRenderer != NULL) {
             std::list<FrameRenderTracker::Info> doneFrames = mSoftRenderer->render(
-                    info->mData->data(), info->mData->size(),
-                    mediaTimeUs, renderTimeNs, NULL, info->mFormat);
+                    buffer->data(), buffer->size(),
+                    mediaTimeUs, renderTimeNs, NULL, buffer->format());
 
             // if we are running, notify rendered frames
             if (!doneFrames.empty() && mState == STARTED && mOnFrameRenderedNotification != NULL) {
@@ -2657,10 +2955,10 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
                 }
             }
         }
+        mBufferChannel->renderOutputBuffer(buffer, renderTimeNs);
+    } else {
+        mBufferChannel->discardBuffer(buffer);
     }
-
-    info->mNotify->post();
-    info->mNotify = NULL;
 
     return OK;
 }
@@ -2677,20 +2975,20 @@ ssize_t MediaCodec::dequeuePortBuffer(int32_t portIndex) {
     size_t index = *availBuffers->begin();
     availBuffers->erase(availBuffers->begin());
 
-    BufferInfo *info = &mPortBuffers[portIndex].editItemAt(index);
+    BufferInfo *info = &mPortBuffers[portIndex][index];
     CHECK(!info->mOwnedByClient);
     {
         Mutex::Autolock al(mBufferLock);
         info->mOwnedByClient = true;
 
         // set image-data
-        if (info->mFormat != NULL) {
+        if (info->mData->format() != NULL) {
             sp<ABuffer> imageData;
-            if (info->mFormat->findBuffer("image-data", &imageData)) {
+            if (info->mData->format()->findBuffer("image-data", &imageData)) {
                 info->mData->meta()->setBuffer("image-data", imageData);
             }
             int32_t left, top, right, bottom;
-            if (info->mFormat->findRect("crop", &left, &top, &right, &bottom)) {
+            if (info->mData->format()->findRect("crop", &left, &top, &right, &bottom)) {
                 info->mData->meta()->setRect("crop-rect", left, top, right, bottom);
             }
         }
@@ -2711,7 +3009,7 @@ status_t MediaCodec::connectToSurface(const sp<Surface> &surface) {
             return ALREADY_EXISTS;
         }
 
-        err = native_window_api_connect(surface.get(), NATIVE_WINDOW_API_MEDIA);
+        err = nativeWindowConnect(surface.get(), "connectToSurface");
         if (err == OK) {
             // Require a fresh set of buffers after each connect by using a unique generation
             // number. Rely on the fact that max supported process id by Linux is 2^22.
@@ -2726,12 +3024,12 @@ status_t MediaCodec::connectToSurface(const sp<Surface> &surface) {
             // This is needed as the consumer may be holding onto stale frames that it can reattach
             // to this surface after disconnect/connect, and those free frames would inherit the new
             // generation number. Disconnecting after setting a unique generation prevents this.
-            native_window_api_disconnect(surface.get(), NATIVE_WINDOW_API_MEDIA);
-            err = native_window_api_connect(surface.get(), NATIVE_WINDOW_API_MEDIA);
+            nativeWindowDisconnect(surface.get(), "connectToSurface(reconnect)");
+            err = nativeWindowConnect(surface.get(), "connectToSurface(reconnect)");
         }
 
         if (err != OK) {
-            ALOGE("native_window_api_connect returned an error: %s (%d)", strerror(-err), err);
+            ALOGE("nativeWindowConnect returned an error: %s (%d)", strerror(-err), err);
         }
     }
     // do not return ALREADY_EXISTS unless surfaces are the same
@@ -2743,9 +3041,9 @@ status_t MediaCodec::disconnectFromSurface() {
     if (mSurface != NULL) {
         // Resetting generation is not technically needed, but there is no need to keep it either
         mSurface->setGenerationNumber(0);
-        err = native_window_api_disconnect(mSurface.get(), NATIVE_WINDOW_API_MEDIA);
+        err = nativeWindowDisconnect(mSurface.get(), "disconnectFromSurface");
         if (err != OK) {
-            ALOGW("native_window_api_disconnect returned an error: %s (%d)", strerror(-err), err);
+            ALOGW("nativeWindowDisconnect returned an error: %s (%d)", strerror(-err), err);
         }
         // assume disconnected even on error
         mSurface.clear();
@@ -2780,8 +3078,8 @@ void MediaCodec::onInputBufferAvailable() {
 void MediaCodec::onOutputBufferAvailable() {
     int32_t index;
     while ((index = dequeuePortBuffer(kPortIndexOutput)) >= 0) {
-        const sp<ABuffer> &buffer =
-            mPortBuffers[kPortIndexOutput].itemAt(index).mData;
+        const sp<MediaCodecBuffer> &buffer =
+            mPortBuffers[kPortIndexOutput][index].mData;
         sp<AMessage> msg = mCallback->dup();
         msg->setInt32("callbackID", CB_OUTPUT_AVAILABLE);
         msg->setInt32("index", index);
@@ -2793,22 +3091,8 @@ void MediaCodec::onOutputBufferAvailable() {
 
         msg->setInt64("timeUs", timeUs);
 
-        int32_t omxFlags;
-        CHECK(buffer->meta()->findInt32("omxFlags", &omxFlags));
-
-        uint32_t flags = 0;
-        if (omxFlags & OMX_BUFFERFLAG_SYNCFRAME) {
-            flags |= BUFFER_FLAG_SYNCFRAME;
-        }
-        if (omxFlags & OMX_BUFFERFLAG_CODECCONFIG) {
-            flags |= BUFFER_FLAG_CODECCONFIG;
-        }
-        if (omxFlags & OMX_BUFFERFLAG_EOS) {
-            flags |= BUFFER_FLAG_EOS;
-        }
-        if (omxFlags & OMX_BUFFERFLAG_DATACORRUPT) {
-            flags |= BUFFER_FLAG_DATACORRUPT;
-        }
+        int32_t flags;
+        CHECK(buffer->meta()->findInt32("flags", &flags));
 
         msg->setInt32("flags", flags);
 
@@ -2839,7 +3123,6 @@ void MediaCodec::onOutputFormatChanged() {
         msg->post();
     }
 }
-
 
 void MediaCodec::postActivityNotificationIfPossible() {
     if (mActivityNotify == NULL) {
@@ -2884,7 +3167,7 @@ status_t MediaCodec::onSetParameters(const sp<AMessage> &params) {
 }
 
 status_t MediaCodec::amendOutputFormatWithCodecSpecificData(
-        const sp<ABuffer> &buffer) {
+        const sp<MediaCodecBuffer> &buffer) {
     AString mime;
     CHECK(mOutputFormat->findString("mime", &mime));
 
@@ -2918,7 +3201,10 @@ status_t MediaCodec::amendOutputFormatWithCodecSpecificData(
     } else {
         // For everything else we just stash the codec specific data into
         // the output format as a single piece of csd under "csd-0".
-        mOutputFormat->setBuffer("csd-0", buffer);
+        sp<ABuffer> csd = new ABuffer(buffer->size());
+        memcpy(csd->data(), buffer->data(), buffer->size());
+        csd->setRange(0, buffer->size());
+        mOutputFormat->setBuffer("csd-0", csd);
     }
 
     return OK;
@@ -2930,10 +3216,10 @@ void MediaCodec::updateBatteryStat() {
     }
 
     if (mState == CONFIGURED && !mBatteryStatNotified) {
-        BatteryNotifier::getInstance().noteStartVideo();
+        BatteryNotifier::getInstance().noteStartVideo(mUid);
         mBatteryStatNotified = true;
     } else if (mState == UNINITIALIZED && mBatteryStatNotified) {
-        BatteryNotifier::getInstance().noteStopVideo();
+        BatteryNotifier::getInstance().noteStopVideo(mUid);
         mBatteryStatNotified = false;
     }
 }

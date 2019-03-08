@@ -30,7 +30,6 @@
 #include <media/stagefright/MetaData.h>
 #include <utils/String8.h>
 #include <cutils/bitops.h>
-#include <system/audio.h>
 
 #define CHANNEL_MASK_USE_CHANNEL_ORDER 0
 
@@ -46,7 +45,7 @@ enum {
 };
 
 static const char* WAVEEXT_SUBFORMAT = "\x00\x00\x00\x00\x10\x00\x80\x00\x00\xAA\x00\x38\x9B\x71";
-
+static const char* AMBISONIC_SUBFORMAT = "\x00\x00\x21\x07\xD3\x11\x86\x44\xC8\xC1\xCA\x00\x00\x00";
 
 static uint32_t U32_LE_AT(const uint8_t *ptr) {
     return ptr[3] << 24 | ptr[2] << 16 | ptr[1] << 8 | ptr[0];
@@ -251,7 +250,8 @@ status_t WAVExtractor::init() {
                 // In a WAVE_EXT header, the first two bytes of the GUID stored at byte 24 contain
                 // the sample format, using the same definitions as a regular WAV header
                 mWaveFormat = U16_LE_AT(&formatSpec[24]);
-                if (memcmp(&formatSpec[26], WAVEEXT_SUBFORMAT, 14)) {
+                if (memcmp(&formatSpec[26], WAVEEXT_SUBFORMAT, 14) &&
+                    memcmp(&formatSpec[26], AMBISONIC_SUBFORMAT, 14)) {
                     ALOGE("unsupported GUID");
                     return ERROR_UNSUPPORTED;
                 }
@@ -292,12 +292,6 @@ status_t WAVExtractor::init() {
                     case WAVE_FORMAT_IEEE_FLOAT:
                         mTrackMeta->setCString(
                                 kKeyMIMEType, MEDIA_MIMETYPE_AUDIO_RAW);
-                        if (mWaveFormat == WAVE_FORMAT_IEEE_FLOAT) {
-                            mTrackMeta->setInt32(kKeyPcmEncoding, kAudioEncodingPcmFloat);
-                        } else {
-                            mTrackMeta->setInt32(kKeyPcmEncoding,
-                                    bitsToAudioEncoding(mBitsPerSample));
-                        }
                         break;
                     case WAVE_FORMAT_ALAW:
                         mTrackMeta->setCString(
@@ -382,10 +376,9 @@ WAVSource::~WAVSource() {
 }
 
 status_t WAVSource::start(MetaData * /* params */) {
+    ALOGV("WAVSource::start");
 
-    if (mStarted) {
-        return OK;
-    }
+    CHECK(!mStarted);
 
     // some WAV files may have large audio buffers that use shared memory transfer.
     mGroup = new MediaBufferGroup(4 /* buffers */, kMaxFrameSize);
@@ -458,8 +451,6 @@ status_t WAVSource::read(
     size_t maxBytesToRead =
         mBitsPerSample == 8 ? kMaxFrameSize / 2 : 
         (mBitsPerSample == 24 ? 3*(kMaxFrameSize/3): kMaxFrameSize);
-    ALOGV("%s mBitsPerSample %d, kMaxFrameSize %zu, ",
-          __func__, mBitsPerSample, kMaxFrameSize);
 
     size_t maxBytesAvailable =
         (mCurrentPos - mOffset >= (off64_t)mSize)

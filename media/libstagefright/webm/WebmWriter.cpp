@@ -31,8 +31,6 @@
 #include <sys/stat.h>
 #include <inttypes.h>
 
-#include "stagefright/AVExtensions.h"
-
 using namespace webm;
 
 namespace {
@@ -120,7 +118,6 @@ sp<WebmElement> WebmWriter::audioTrack(const sp<MetaData>& md) {
             'a', 'n', 'd', 'r', 'o', 'i', 'd', 0, 0, 0, 0, 1 };
     const void *headerData3;
     size_t headerSize1, headerSize2 = sizeof(headerData2), headerSize3;
-    int32_t bitWidth = 0;
 
     if (!md->findInt32(kKeyChannelCount, &nChannels)
             || !md->findInt32(kKeySampleRate, &samplerate)
@@ -150,15 +147,10 @@ sp<WebmElement> WebmWriter::audioTrack(const sp<MetaData>& md) {
     off += headerSize2;
     memcpy(codecPrivateData + off, headerData3, headerSize3);
 
-    if (AVUtils::get()->hasAudioSampleBits(md)) {
-        bitWidth = AVUtils::get()->getAudioSampleBits(md);
-    }
-
     sp<WebmElement> entry = WebmElement::AudioTrackEntry(
             nChannels,
             samplerate,
-            codecPrivateBuf,
-            bitWidth);
+            codecPrivateBuf);
     return entry;
 }
 
@@ -496,12 +488,12 @@ status_t WebmWriter::start(MetaData *params) {
             params->findInt32(kKeyBitRate, &bitRate);
         }
         mEstimatedCuesSize = estimateCuesSize(bitRate);
-        CHECK_GE(mEstimatedCuesSize, 8);
+        CHECK_GE(mEstimatedCuesSize, 8u);
         cues = new EbmlVoid(mEstimatedCuesSize);
     }
 
     sp<WebmElement> elems[] = { ebml, segment, seekHead, info, tracks, cues };
-    size_t nElems = sizeof(elems) / sizeof(elems[0]);
+    static const size_t nElems = sizeof(elems) / sizeof(elems[0]);
     uint64_t offsets[nElems];
     uint64_t sizes[nElems];
     for (uint32_t i = 0; i < nElems; i++) {

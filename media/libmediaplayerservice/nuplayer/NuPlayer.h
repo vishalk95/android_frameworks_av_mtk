@@ -12,25 +12,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * This file was modified by Dolby Laboratories, Inc. The portions of the
- * code that are surrounded by "DOLBY..." are copyrighted and
- * licensed separately, as follows:
- *
- *  (C) 2015-2016 Dolby Laboratories, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
  */
 
 #ifndef NU_PLAYER_H_
@@ -38,6 +19,7 @@
 #define NU_PLAYER_H_
 
 #include <media/AudioResamplerPublic.h>
+#include <media/ICrypto.h>
 #include <media/MediaPlayerInterface.h>
 #include <media/stagefright/foundation/AHandler.h>
 
@@ -52,7 +34,7 @@ class MetaData;
 struct NuPlayerDriver;
 
 struct NuPlayer : public AHandler {
-    NuPlayer(pid_t pid);
+    explicit NuPlayer(pid_t pid);
 
     void setUID(uid_t uid);
 
@@ -60,7 +42,7 @@ struct NuPlayer : public AHandler {
 
     void setDataSourceAsync(const sp<IStreamSource> &source);
 
-    virtual void setDataSourceAsync(
+    void setDataSourceAsync(
             const sp<IMediaHTTPService> &httpService,
             const char *url,
             const KeyedVector<String8, String8> *headers);
@@ -68,6 +50,9 @@ struct NuPlayer : public AHandler {
     void setDataSourceAsync(int fd, int64_t offset, int64_t length);
 
     void setDataSourceAsync(const sp<DataSource> &source);
+
+    status_t getDefaultBufferingSettings(BufferingSettings* buffering /* nonnull */);
+    status_t setBufferingSettings(const BufferingSettings& buffering);
 
     void prepareAsync();
 
@@ -89,7 +74,10 @@ struct NuPlayer : public AHandler {
 
     // Will notify the driver through "notifySeekComplete" once finished
     // and needNotify is true.
-    void seekToAsync(int64_t seekTimeUs, bool needNotify = false);
+    void seekToAsync(
+            int64_t seekTimeUs,
+            MediaPlayerSeekMode mode = MediaPlayerSeekMode::SEEK_PREVIOUS_SYNC,
+            bool needNotify = false);
 
     status_t setVideoScalingMode(int32_t mode);
     status_t getTrackInfo(Parcel* reply) const;
@@ -101,19 +89,22 @@ struct NuPlayer : public AHandler {
     sp<MetaData> getFileMeta();
     float getFrameRate();
 
+    // Modular DRM
+    status_t prepareDrm(const uint8_t uuid[16], const Vector<uint8_t> &drmSessionId);
+    status_t releaseDrm();
+
+    const char *getDataSourceType();
+
 protected:
     virtual ~NuPlayer();
 
     virtual void onMessageReceived(const sp<AMessage> &msg);
-    virtual bool ifDecodedPCMOffload() {return false;}
-    virtual void setDecodedPcmOffload(bool /*decodePcmOffload*/) {}
-    virtual bool canOffloadDecodedPCMStream(const sp<MetaData> /*meta*/,
-            bool /*hasVideo*/, bool /*isStreaming*/, audio_stream_type_t /*streamType*/) {return false;}
-    static bool IsHTTPLiveURL(const char *url);
+
 public:
     struct NuPlayerStreamListener;
     struct Source;
 
+private:
     struct Decoder;
     struct DecoderBase;
     struct DecoderPassThrough;
@@ -131,7 +122,6 @@ public:
     struct PostMessageAction;
     struct SimpleAction;
 
-protected:
     enum {
         kWhatSetDataSource              = '=DaS',
         kWhatPrepare                    = 'prep',
@@ -157,6 +147,10 @@ protected:
         kWhatGetTrackInfo               = 'gTrI',
         kWhatGetSelectedTrack           = 'gSel',
         kWhatSelectTrack                = 'selT',
+        kWhatGetDefaultBufferingSettings = 'gDBS',
+        kWhatSetBufferingSettings       = 'sBuS',
+        kWhatPrepareDrm                 = 'pDrm',
+        kWhatReleaseDrm                 = 'rDrm',
     };
 
     wp<NuPlayerDriver> mDriver;
@@ -177,6 +171,8 @@ protected:
     int32_t mAudioDecoderGeneration;
     int32_t mVideoDecoderGeneration;
     int32_t mRendererGeneration;
+
+    int64_t mLastStartedPlayingTimeNs;
 
     int64_t mPreviousSeekTimeUs;
 
@@ -224,6 +220,8 @@ protected:
     bool mPrepared;
     bool mResetting;
     bool mSourceStarted;
+    bool mAudioDecoderError;
+    bool mVideoDecoderError;
 
     // Actual pause state, either as requested by client or due to buffering.
     bool mPaused;
@@ -235,6 +233,22 @@ protected:
 
     // Pause state as requested by source (internally) due to buffering
     bool mPausedForBuffering;
+
+    // Modular DRM
+    sp<ICrypto> mCrypto;
+    bool mIsDrmProtected;
+
+    typedef enum {
+        DATA_SOURCE_TYPE_NONE,
+        DATA_SOURCE_TYPE_HTTP_LIVE,
+        DATA_SOURCE_TYPE_RTSP,
+        DATA_SOURCE_TYPE_GENERIC_URL,
+        DATA_SOURCE_TYPE_GENERIC_FD,
+        DATA_SOURCE_TYPE_MEDIA,
+        DATA_SOURCE_TYPE_STREAM,
+    } DATA_SOURCE_TYPE;
+
+    std::atomic<DATA_SOURCE_TYPE> mDataSourceType;
 
     inline const sp<DecoderBase> &getDecoder(bool audio) {
         return audio ? mAudioDecoder : mVideoDecoder;
@@ -254,7 +268,7 @@ protected:
             int64_t currentPositionUs, bool forceNonOffload, bool needsToCreateAudioDecoder);
     void determineAudioModeChange(const sp<AMessage> &audioFormat);
 
-    virtual status_t instantiateDecoder(
+    status_t instantiateDecoder(
             bool audio, sp<DecoderBase> *decoder, bool checkAudioModeChange = true);
 
     status_t onInstantiateSecureDecoders();
@@ -268,7 +282,9 @@ protected:
     void handleFlushComplete(bool audio, bool isDecoder);
     void finishFlushIfPossible();
 
-    void onStart(int64_t startPositionUs = -1);
+    void onStart(
+            int64_t startPositionUs = -1,
+            MediaPlayerSeekMode mode = MediaPlayerSeekMode::SEEK_PREVIOUS_SYNC);
     void onResume();
     void onPause();
 
@@ -286,14 +302,14 @@ protected:
 
     void processDeferredActions();
 
-    virtual void performSeek(int64_t seekTimeUs);
+    void performSeek(int64_t seekTimeUs, MediaPlayerSeekMode mode);
     void performDecoderFlush(FlushCommand audio, FlushCommand video);
     void performReset();
     void performScanSources();
     void performSetSurface(const sp<Surface> &wrapper);
     void performResumeDecoders(bool needNotify);
 
-    virtual void onSourceNotify(const sp<AMessage> &msg);
+    void onSourceNotify(const sp<AMessage> &msg);
     void onClosedCaptionNotify(const sp<AMessage> &msg);
 
     void queueDecoderShutdown(
@@ -303,10 +319,10 @@ protected:
     void sendTimedMetaData(const sp<ABuffer> &buffer);
     void sendTimedTextData(const sp<ABuffer> &buffer);
 
-    void writeTrackInfo(Parcel* reply, const sp<AMessage> format) const;
-#ifdef DOLBY_ENABLE
-    void onDolbyMessageReceived();
-#endif // DOLBY_END
+    void writeTrackInfo(Parcel* reply, const sp<AMessage>& format) const;
+
+    status_t onPrepareDrm(const sp<AMessage> &msg);
+    status_t onReleaseDrm();
 
     DISALLOW_EVIL_CONSTRUCTORS(NuPlayer);
 };

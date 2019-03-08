@@ -1,42 +1,25 @@
-# This file was modified by Dolby Laboratories, Inc. The portions of the
-# code that are surrounded by "DOLBY..." are copyrighted and
-# licensed separately, as follows:
-#
-# (C)  2016 Dolby Laboratories, Inc.
-# All rights reserved.
-#
-# This program is protected under international and U.S. Copyright laws as
-# an unpublished work. This program is confidential and proprietary to the
-# copyright owners. Reproduction or disclosure, in whole or in part, or the
-# production of derivative works therefrom without the express permission of
-# the copyright owners is prohibited.
-#
 LOCAL_PATH:= $(call my-dir)
 
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:=       \
-	stagefright.cpp \
-	jpeg.cpp	\
-	SineSource.cpp
+        stagefright.cpp \
+        jpeg.cpp        \
+        SineSource.cpp
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright libmedia libutils libbinder libstagefright_foundation \
-	libjpeg libgui libcutils liblog
+        libstagefright libmedia libutils libbinder libstagefright_foundation \
+        libjpeg libgui libcutils liblog \
+        libhidlmemory \
+        android.hardware.media.omx@1.0 \
 
 LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	frameworks/av/media/libstagefright/include \
-	$(TOP)/frameworks/native/include/media/openmax \
-	external/jpeg \
+        frameworks/av/media/libstagefright \
+        frameworks/av/media/libstagefright/include \
+        frameworks/native/include/media/openmax \
+        external/jpeg \
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-# DOLBY_START
-ifeq ($(strip $(DOLBY_ENABLE)),true)
-    LOCAL_CFLAGS += $(dolby_cflags)
-endif
-# DOLBY_END
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 
@@ -49,19 +32,18 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:=         \
-	SineSource.cpp    \
-	record.cpp
+        SineSource.cpp    \
+        record.cpp
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright libmedia liblog libutils libbinder libstagefright_foundation
+        libstagefright libmedia liblog libutils libbinder libstagefright_foundation
 
 LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax \
-	$(TOP)/frameworks/native/include/media/hardware
+        frameworks/av/media/libstagefright \
+        frameworks/native/include/media/openmax \
+        frameworks/native/include/media/hardware
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 
@@ -74,19 +56,18 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:=         \
-	SineSource.cpp    \
-	recordvideo.cpp
+        SineSource.cpp    \
+        recordvideo.cpp
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright libmedia liblog libutils libbinder libstagefright_foundation
+        libstagefright libmedia liblog libutils libbinder libstagefright_foundation
 
 LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax \
-	$(TOP)/frameworks/native/include/media/hardware
+        frameworks/av/media/libstagefright \
+        frameworks/native/include/media/openmax \
+        frameworks/native/include/media/hardware
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 
@@ -100,18 +81,17 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:=         \
-	SineSource.cpp    \
-	audioloop.cpp
+        SineSource.cpp    \
+        audioloop.cpp
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright libmedia liblog libutils libbinder libstagefright_foundation
+        libstagefright libmedia liblog libutils libbinder libstagefright_foundation
 
 LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax
+        frameworks/av/media/libstagefright \
+        frameworks/native/include/media/openmax
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 
@@ -127,15 +107,14 @@ LOCAL_SRC_FILES:=         \
         stream.cpp    \
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright liblog libutils libbinder libgui \
-	libstagefright_foundation libmedia libcutils
+        libstagefright liblog libutils libbinder libgui \
+        libstagefright_foundation libmedia libcutils
 
 LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax
+        frameworks/av/media/libstagefright \
+        frameworks/native/include/media/openmax
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 
@@ -147,44 +126,19 @@ include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
 
-LOCAL_SRC_FILES:=         \
-	sf2.cpp    \
-
-LOCAL_SHARED_LIBRARIES := \
-	libstagefright liblog libutils libbinder libstagefright_foundation \
-	libmedia libgui libcutils libui
-
-LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax
-
-LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
-
-LOCAL_MODULE_TAGS := optional
-
-LOCAL_MODULE:= sf2
-
-include $(BUILD_EXECUTABLE)
-
-################################################################################
-
-include $(CLEAR_VARS)
-
 LOCAL_SRC_FILES:=               \
-	codec.cpp               \
-	SimplePlayer.cpp        \
+        codec.cpp               \
+        SimplePlayer.cpp        \
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright liblog libutils libbinder libstagefright_foundation \
-	libmedia libgui libcutils libui
+        libstagefright liblog libutils libbinder libstagefright_foundation \
+        libmedia libaudioclient libgui libcutils
 
 LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax
+        frameworks/av/media/libstagefright \
+        frameworks/native/include/media/openmax
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 
@@ -197,41 +151,42 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:= \
-	filters/argbtorgba.rs \
-	filters/nightvision.rs \
-	filters/saturation.rs \
-	mediafilter.cpp \
+        filters/argbtorgba.rs \
+        filters/nightvision.rs \
+        filters/saturation.rs \
+        mediafilter.cpp \
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright \
-	liblog \
-	libutils \
-	libbinder \
-	libstagefright_foundation \
-	libmedia \
-	libgui \
-	libcutils \
-	libui \
-	libRScpp \
+        libstagefright \
+        liblog \
+        libutils \
+        libbinder \
+        libstagefright_foundation \
+        libmedia \
+        libgui \
+        libcutils \
+        libRScpp \
 
 LOCAL_C_INCLUDES:= \
-	$(TOP)/frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax \
-	$(TOP)/frameworks/rs/cpp \
-	$(TOP)/frameworks/rs \
+        frameworks/av/media/libstagefright \
+        frameworks/native/include/media/openmax \
+        frameworks/rs/cpp \
+        frameworks/rs \
 
 intermediates := $(call intermediates-dir-for,STATIC_LIBRARIES,libRS,TARGET,)
 LOCAL_C_INCLUDES += $(intermediates)
 
 LOCAL_STATIC_LIBRARIES:= \
-	libstagefright_mediafilter
+        libstagefright_mediafilter
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 
 LOCAL_MODULE:= mediafilter
+
+LOCAL_SANITIZE := cfi
+LOCAL_SANITIZE_DIAG := cfi
 
 include $(BUILD_EXECUTABLE)
 
@@ -240,18 +195,17 @@ include $(BUILD_EXECUTABLE)
 include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES:=               \
-	muxer.cpp            \
+        muxer.cpp            \
 
 LOCAL_SHARED_LIBRARIES := \
-	libstagefright liblog libutils libbinder libstagefright_foundation \
-	libmedia libgui libcutils libui libc
+        libstagefright liblog libutils libbinder libstagefright_foundation \
+        libcutils libc
 
 LOCAL_C_INCLUDES:= \
-	frameworks/av/media/libstagefright \
-	$(TOP)/frameworks/native/include/media/openmax
+        frameworks/av/media/libstagefright \
+        frameworks/native/include/media/openmax
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wall
-LOCAL_CLANG := true
 
 LOCAL_MODULE_TAGS := optional
 

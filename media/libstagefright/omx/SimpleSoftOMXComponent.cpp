@@ -18,8 +18,7 @@
 #define LOG_TAG "SimpleSoftOMXComponent"
 #include <utils/Log.h>
 
-#include "include/SimpleSoftOMXComponent.h"
-
+#include <media/stagefright/omx/SimpleSoftOMXComponent.h>
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/ALooper.h>
 #include <media/stagefright/foundation/AMessage.h>
@@ -77,19 +76,34 @@ bool SimpleSoftOMXComponent::isSetParameterAllowed(
     switch (index) {
         case OMX_IndexParamPortDefinition:
         {
-            portIndex = ((OMX_PARAM_PORTDEFINITIONTYPE *)params)->nPortIndex;
+            const OMX_PARAM_PORTDEFINITIONTYPE *portDefs =
+                    (const OMX_PARAM_PORTDEFINITIONTYPE *) params;
+            if (!isValidOMXParam(portDefs)) {
+                return false;
+            }
+            portIndex = portDefs->nPortIndex;
             break;
         }
 
         case OMX_IndexParamAudioPcm:
         {
-            portIndex = ((OMX_AUDIO_PARAM_PCMMODETYPE *)params)->nPortIndex;
+            const OMX_AUDIO_PARAM_PCMMODETYPE *pcmMode =
+                    (const OMX_AUDIO_PARAM_PCMMODETYPE *) params;
+            if (!isValidOMXParam(pcmMode)) {
+                return false;
+            }
+            portIndex = pcmMode->nPortIndex;
             break;
         }
 
         case OMX_IndexParamAudioAac:
         {
-            portIndex = ((OMX_AUDIO_PARAM_AACPROFILETYPE *)params)->nPortIndex;
+            const OMX_AUDIO_PARAM_AACPROFILETYPE *aacMode =
+                    (const OMX_AUDIO_PARAM_AACPROFILETYPE *) params;
+            if (!isValidOMXParam(aacMode)) {
+                return false;
+            }
+            portIndex = aacMode->nPortIndex;
             break;
         }
 
@@ -430,15 +444,7 @@ void SimpleSoftOMXComponent::onSendCommand(
     }
 }
 
-void SimpleSoftOMXComponent::onTransitionError() {
-    mState = OMX_StateInvalid;
-    mTargetState = OMX_StateInvalid;
-    notify(OMX_EventError, OMX_CommandStateSet, OMX_StateInvalid, 0);
-}
-
 void SimpleSoftOMXComponent::onChangeState(OMX_STATETYPE state) {
-    bool skipTransitions = false;
-
     ALOGV("%p requesting change from %d to %d", this, mState, state);
     // We shouldn't be in a state transition already.
 
@@ -451,36 +457,15 @@ void SimpleSoftOMXComponent::onChangeState(OMX_STATETYPE state) {
         mState = mTargetState = OMX_StateIdle;
         state = OMX_StateLoaded;
     }
-     // We shouldn't be in a state transition already.
-    if (mState != mTargetState) {
-            // Workaround to prevent assertion
-            // XXX CHECK_EQ((int)mState, (int)mTargetState);
-        ALOGW("mState %d != mTargetState %d", mState, mTargetState);
-        skipTransitions = true;
-        onTransitionError();
-    }
 
     CHECK_EQ((int)mState, (int)mTargetState);
 
     switch (mState) {
         case OMX_StateLoaded:
-            if (state != OMX_StateIdle) {
-                // Workaround to prevent assertion
-                // XXX CHECK_EQ((int)state, (int)OMX_StateIdle);
-                ALOGW("In OMX_StateLoaded, state %d != OMX_StateIdle", state);
-                skipTransitions = true;
-                onTransitionError();
-            }
+            CHECK_EQ((int)state, (int)OMX_StateIdle);
             break;
         case OMX_StateIdle:
-            if (!(state == OMX_StateLoaded || state == OMX_StateExecuting)) {
-                // Workaround to prevent assertion
-                // XXX CHECK(state == OMX_StateLoaded || state == OMX_StateExecuting);
-                ALOGW("In OMX_StateIdle, state %d != OMX_StateLoaded||OMX_StateExecuting",
-                      state);
-                skipTransitions = true;
-                onTransitionError();
-            }
+            CHECK(state == OMX_StateLoaded || state == OMX_StateExecuting);
             break;
         case OMX_StateExecuting:
         {
@@ -494,18 +479,9 @@ void SimpleSoftOMXComponent::onChangeState(OMX_STATETYPE state) {
             notify(OMX_EventCmdComplete, OMX_CommandStateSet, state, NULL);
             break;
         }
-        case OMX_StateInvalid: {
-            ALOGW("In OMX_StateInvalid, ignore state transition to %d", state);
-            skipTransitions = true;
-            onTransitionError();
-            break;
-        }
+
         default:
             TRESPASS();
-    }
-
-    if (skipTransitions) {
-        return;
     }
 
     mTargetState = state;

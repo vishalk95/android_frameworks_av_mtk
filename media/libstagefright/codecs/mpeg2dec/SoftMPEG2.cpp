@@ -47,14 +47,8 @@ namespace android {
         (IVD_CONTROL_API_COMMAND_TYPE_T)IMPEG2D_CMD_CTL_SET_NUM_CORES
 
 static const CodecProfileLevel kProfileLevels[] = {
-    { OMX_VIDEO_MPEG2ProfileSimple, OMX_VIDEO_MPEG2LevelLL  },
-    { OMX_VIDEO_MPEG2ProfileSimple, OMX_VIDEO_MPEG2LevelML  },
-    { OMX_VIDEO_MPEG2ProfileSimple, OMX_VIDEO_MPEG2LevelH14 },
     { OMX_VIDEO_MPEG2ProfileSimple, OMX_VIDEO_MPEG2LevelHL  },
 
-    { OMX_VIDEO_MPEG2ProfileMain  , OMX_VIDEO_MPEG2LevelLL  },
-    { OMX_VIDEO_MPEG2ProfileMain  , OMX_VIDEO_MPEG2LevelML  },
-    { OMX_VIDEO_MPEG2ProfileMain  , OMX_VIDEO_MPEG2LevelH14 },
     { OMX_VIDEO_MPEG2ProfileMain  , OMX_VIDEO_MPEG2LevelHL  },
 };
 
@@ -783,6 +777,7 @@ void SoftMPEG2::onQueueFilled(OMX_U32 portIndex) {
 
                 if (portWillReset) {
                     resetDecoder();
+                    resetPlugin();
                     return;
                 }
             } else if (mUpdateColorAspects) {
@@ -794,7 +789,7 @@ void SoftMPEG2::onQueueFilled(OMX_U32 portIndex) {
 
             if (s_dec_op.u4_output_present) {
                 ssize_t timeStampIdx;
-                outHeader->nFilledLen = (mWidth * mHeight * 3) / 2;
+                outHeader->nFilledLen = (outputBufferWidth() * outputBufferHeight() * 3) / 2;
 
                 timeStampIdx = getMinTimestampIdx(mTimeStamps, mTimeStampsValid);
                 if (timeStampIdx < 0) {

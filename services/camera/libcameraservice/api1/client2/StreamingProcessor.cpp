@@ -58,7 +58,7 @@ StreamingProcessor::~StreamingProcessor() {
     deleteRecordingStream();
 }
 
-status_t StreamingProcessor::setPreviewWindow(sp<Surface> window) {
+status_t StreamingProcessor::setPreviewWindow(const sp<Surface>& window) {
     ATRACE_CALL();
     status_t res;
 
@@ -72,7 +72,7 @@ status_t StreamingProcessor::setPreviewWindow(sp<Surface> window) {
     return OK;
 }
 
-status_t StreamingProcessor::setRecordingWindow(sp<Surface> window) {
+status_t StreamingProcessor::setRecordingWindow(const sp<Surface>& window) {
     ATRACE_CALL();
     status_t res;
 
@@ -114,16 +114,11 @@ status_t StreamingProcessor::updatePreviewRequest(const Parameters &params) {
         }
 
         // Use CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG for ZSL streaming case.
-        if (client->getCameraDeviceVersion() >= CAMERA_DEVICE_API_VERSION_3_0) {
-            if (params.useZeroShutterLag() && !params.recordingHint) {
-                res = device->createDefaultRequest(CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG,
-                        &mPreviewRequest);
-            } else {
-                res = device->createDefaultRequest(CAMERA3_TEMPLATE_PREVIEW,
-                        &mPreviewRequest);
-            }
+        if (params.useZeroShutterLag() && !params.recordingHint) {
+            res = device->createDefaultRequest(
+                    CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG, &mPreviewRequest);
         } else {
-            res = device->createDefaultRequest(CAMERA2_TEMPLATE_PREVIEW,
+            res = device->createDefaultRequest(CAMERA3_TEMPLATE_PREVIEW,
                     &mPreviewRequest);
         }
 
@@ -166,18 +161,17 @@ status_t StreamingProcessor::updatePreviewStream(const Parameters &params) {
 
     if (mPreviewStreamId != NO_STREAM) {
         // Check if stream parameters have to change
-        uint32_t currentWidth, currentHeight;
-        res = device->getStreamInfo(mPreviewStreamId,
-                &currentWidth, &currentHeight, 0, 0);
+        CameraDeviceBase::StreamInfo streamInfo;
+        res = device->getStreamInfo(mPreviewStreamId, &streamInfo);
         if (res != OK) {
             ALOGE("%s: Camera %d: Error querying preview stream info: "
                     "%s (%d)", __FUNCTION__, mId, strerror(-res), res);
             return res;
         }
-        if (currentWidth != (uint32_t)params.previewWidth ||
-                currentHeight != (uint32_t)params.previewHeight) {
+        if (streamInfo.width != (uint32_t)params.previewWidth ||
+                streamInfo.height != (uint32_t)params.previewHeight) {
             ALOGV("%s: Camera %d: Preview size switch: %d x %d -> %d x %d",
-                    __FUNCTION__, mId, currentWidth, currentHeight,
+                    __FUNCTION__, mId, streamInfo.width, streamInfo.height,
                     params.previewWidth, params.previewHeight);
             res = device->waitUntilDrained();
             if (res != OK) {
@@ -317,10 +311,8 @@ status_t StreamingProcessor::recordingStreamNeedsUpdate(
         return INVALID_OPERATION;
     }
 
-    uint32_t currentWidth, currentHeight, currentFormat;
-    android_dataspace currentDataSpace;
-    res = device->getStreamInfo(mRecordingStreamId,
-            &currentWidth, &currentHeight, &currentFormat, &currentDataSpace);
+    CameraDeviceBase::StreamInfo streamInfo;
+    res = device->getStreamInfo(mRecordingStreamId, &streamInfo);
     if (res != OK) {
         ALOGE("%s: Camera %d: Error querying recording output stream info: "
                 "%s (%d)", __FUNCTION__, mId,
@@ -329,10 +321,10 @@ status_t StreamingProcessor::recordingStreamNeedsUpdate(
     }
 
     if (mRecordingWindow == nullptr ||
-            currentWidth != (uint32_t)params.videoWidth ||
-            currentHeight != (uint32_t)params.videoHeight ||
-            currentFormat != (uint32_t)params.videoFormat ||
-            currentDataSpace != params.videoDataSpace) {
+            streamInfo.width != (uint32_t)params.videoWidth ||
+            streamInfo.height != (uint32_t)params.videoHeight ||
+            !streamInfo.matchFormat((uint32_t)params.videoFormat) ||
+            !streamInfo.matchDataSpace(params.videoDataSpace)) {
         *needsUpdate = true;
         return res;
     }
@@ -353,22 +345,18 @@ status_t StreamingProcessor::updateRecordingStream(const Parameters &params) {
 
     if (mRecordingStreamId != NO_STREAM) {
         // Check if stream parameters have to change
-        uint32_t currentWidth, currentHeight;
-        uint32_t currentFormat;
-        android_dataspace currentDataSpace;
-        res = device->getStreamInfo(mRecordingStreamId,
-                &currentWidth, &currentHeight,
-                &currentFormat, &currentDataSpace);
+        CameraDeviceBase::StreamInfo streamInfo;
+        res = device->getStreamInfo(mRecordingStreamId, &streamInfo);
         if (res != OK) {
             ALOGE("%s: Camera %d: Error querying recording output stream info: "
                     "%s (%d)", __FUNCTION__, mId,
                     strerror(-res), res);
             return res;
         }
-        if (currentWidth != (uint32_t)params.videoWidth ||
-                currentHeight != (uint32_t)params.videoHeight ||
-                currentFormat != (uint32_t)params.videoFormat ||
-                currentDataSpace != params.videoDataSpace) {
+        if (streamInfo.width != (uint32_t)params.videoWidth ||
+                streamInfo.height != (uint32_t)params.videoHeight ||
+                !streamInfo.matchFormat((uint32_t)params.videoFormat) ||
+                !streamInfo.matchDataSpace(params.videoDataSpace)) {
             // TODO: Should wait to be sure previous recording has finished
             res = device->deleteStream(mRecordingStreamId);
 

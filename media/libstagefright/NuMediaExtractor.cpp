@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 #define LOG_TAG "NuMediaExtractor"
 #include <utils/Log.h>
 
@@ -22,7 +22,6 @@
 
 #include "include/ESDS.h"
 #include "include/NuCachedSource2.h"
-#include "include/WVMExtractor.h"
 
 #include <media/stagefright/foundation/ABuffer.h>
 #include <media/stagefright/foundation/ADebug.h>
@@ -40,8 +39,7 @@
 namespace android {
 
 NuMediaExtractor::NuMediaExtractor()
-    : mIsWidevineExtractor(false),
-      mTotalBitrate(-1ll),
+    : mTotalBitrate(-1ll),
       mDurationUs(-1ll) {
 }
 
@@ -51,7 +49,8 @@ NuMediaExtractor::~NuMediaExtractor() {
     for (size_t i = 0; i < mSelectedTracks.size(); ++i) {
         TrackInfo *info = &mSelectedTracks.editItemAt(i);
 
-        CHECK_EQ((status_t)OK, info->mSource->stop());
+        status_t err = info->mSource->stop();
+        ALOGE_IF(err != OK, "error %d stopping track %zu", err, i);
     }
 
     mSelectedTracks.clear();
@@ -66,7 +65,7 @@ status_t NuMediaExtractor::setDataSource(
         const KeyedVector<String8, String8> *headers) {
     Mutex::Autolock autoLock(mLock);
 
-    if (mImpl != NULL) {
+    if (mImpl != NULL || path == NULL) {
         return -EINVAL;
     }
 
@@ -77,51 +76,14 @@ status_t NuMediaExtractor::setDataSource(
         return -ENOENT;
     }
 
-    mIsWidevineExtractor = false;
-    if (!strncasecmp("widevine://", path, 11)) {
-        String8 mimeType;
-        float confidence;
-        sp<AMessage> dummy;
-        bool success = SniffWVM(dataSource, &mimeType, &confidence, &dummy);
-
-        if (!success
-                || strcasecmp(
-                    mimeType.string(), MEDIA_MIMETYPE_CONTAINER_WVM)) {
-            return ERROR_UNSUPPORTED;
-        }
-
-        sp<WVMExtractor> extractor = new WVMExtractor(dataSource);
-        extractor->setAdaptiveStreamingMode(true);
-
-        mImpl = extractor;
-        mIsWidevineExtractor = true;
-    } else {
-        mImpl = MediaExtractor::Create(dataSource);
-    }
+    mImpl = MediaExtractor::Create(dataSource);
 
     if (mImpl == NULL) {
         return ERROR_UNSUPPORTED;
     }
 
-    sp<MetaData> fileMeta = mImpl->getMetaData();
-    const char *containerMime;
-    if (fileMeta != NULL
-            && fileMeta->findCString(kKeyMIMEType, &containerMime)
-            && !strcasecmp(containerMime, "video/wvm")) {
-        // We always want to use "cryptoPluginMode" when using the wvm
-        // extractor. We can tell that it is this extractor by looking
-        // at the container mime type.
-        // The cryptoPluginMode ensures that the extractor will actually
-        // give us data in a call to MediaSource::read(), unlike its
-        // default mode that we used in AwesomePlayer.
-        // TODO: change default mode
-        static_cast<WVMExtractor *>(mImpl.get())->setCryptoPluginMode(true);
-    } else if (mImpl->getDrmFlag()) {
-        // For all other drm content, we don't want to expose decrypted
-        // content to Java application.
-        mImpl.clear();
-        mImpl = NULL;
-        return ERROR_UNSUPPORTED;
+    if (!mCasToken.empty()) {
+        mImpl->setMediaCas(mCasToken);
     }
 
     status_t err = updateDurationAndBitrate();
@@ -156,6 +118,10 @@ status_t NuMediaExtractor::setDataSource(int fd, off64_t offset, off64_t size) {
         return ERROR_UNSUPPORTED;
     }
 
+    if (!mCasToken.empty()) {
+        mImpl->setMediaCas(mCasToken);
+    }
+
     err = updateDurationAndBitrate();
     if (err == OK) {
         mDataSource = fileSource;
@@ -182,12 +148,49 @@ status_t NuMediaExtractor::setDataSource(const sp<DataSource> &source) {
         return ERROR_UNSUPPORTED;
     }
 
+    if (!mCasToken.empty()) {
+        mImpl->setMediaCas(mCasToken);
+    }
+
     err = updateDurationAndBitrate();
     if (err == OK) {
         mDataSource = source;
     }
 
     return err;
+}
+
+static String8 arrayToString(const std::vector<uint8_t> &array) {
+    String8 result;
+    for (size_t i = 0; i < array.size(); i++) {
+        result.appendFormat("%02x ", array[i]);
+    }
+    if (result.isEmpty()) {
+        result.append("(null)");
+    }
+    return result;
+}
+
+status_t NuMediaExtractor::setMediaCas(const HInterfaceToken &casToken) {
+    ALOGV("setMediaCas: casToken={%s}", arrayToString(casToken).c_str());
+
+    Mutex::Autolock autoLock(mLock);
+
+    if (casToken.empty()) {
+        return BAD_VALUE;
+    }
+
+    mCasToken = casToken;
+
+    if (mImpl != NULL) {
+        mImpl->setMediaCas(casToken);
+        status_t err = updateDurationAndBitrate();
+        if (err != OK) {
+            return err;
+        }
+    }
+
+    return OK;
 }
 
 status_t NuMediaExtractor::updateDurationAndBitrate() {
@@ -615,6 +618,11 @@ status_t NuMediaExtractor::getSampleMeta(sp<MetaData> *sampleMeta) {
     return OK;
 }
 
+status_t NuMediaExtractor::getMetrics(Parcel *reply) {
+    status_t status = mImpl->getMetrics(reply);
+    return status;
+}
+
 bool NuMediaExtractor::getTotalBitrate(int64_t *bitrate) const {
     if (mTotalBitrate >= 0) {
         *bitrate = mTotalBitrate;
@@ -636,15 +644,7 @@ bool NuMediaExtractor::getCachedDuration(
     Mutex::Autolock autoLock(mLock);
 
     int64_t bitrate;
-    if (mIsWidevineExtractor) {
-        sp<WVMExtractor> wvmExtractor =
-            static_cast<WVMExtractor *>(mImpl.get());
-
-        status_t finalStatus;
-        *durationUs = wvmExtractor->getCachedDurationUs(&finalStatus);
-        *eos = (finalStatus != OK);
-        return true;
-    } else if ((mDataSource->flags() & DataSource::kIsCachingDataSource)
+    if ((mDataSource->flags() & DataSource::kIsCachingDataSource)
             && getTotalBitrate(&bitrate)) {
         sp<NuCachedSource2> cachedSource =
             static_cast<NuCachedSource2 *>(mDataSource.get());

@@ -18,7 +18,7 @@
 
 #define SOFT_MP3_H_
 
-#include "SimpleSoftOMXComponent.h"
+#include <media/stagefright/omx/SimpleSoftOMXComponent.h>
 
 struct tPVMP3DecoderExternal;
 
@@ -69,9 +69,6 @@ private:
         AWAITING_DISABLED,
         AWAITING_ENABLED
     } mOutputPortSettingsChange;
-
-    int64_t mLastAnchorTimeUs;
-    int64_t mNextOutBufferTimeUs;
 
     void initPorts();
     void initDecoder();

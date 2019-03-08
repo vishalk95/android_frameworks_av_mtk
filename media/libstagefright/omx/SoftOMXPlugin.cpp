@@ -12,33 +12,14 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * This file was modified by Dolby Laboratories, Inc. The portions of the
- * code that are surrounded by "DOLBY..." are copyrighted and
- * licensed separately, as follows:
- *
- *  (C) 2011-2016 Dolby Laboratories, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
  */
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "SoftOMXPlugin"
 #include <utils/Log.h>
 
-#include "SoftOMXPlugin.h"
-#include "include/SoftOMXComponent.h"
+#include <media/stagefright/omx/SoftOMXPlugin.h>
+#include <media/stagefright/omx/SoftOMXComponent.h>
 
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AString.h>
@@ -75,17 +56,11 @@ static const struct {
     { "OMX.google.vp8.decoder", "vpxdec", "video_decoder.vp8" },
     { "OMX.google.vp9.decoder", "vpxdec", "video_decoder.vp9" },
     { "OMX.google.vp8.encoder", "vpxenc", "video_encoder.vp8" },
+    { "OMX.google.vp9.encoder", "vpxenc", "video_encoder.vp9" },
     { "OMX.google.raw.decoder", "rawdec", "audio_decoder.raw" },
+    { "OMX.google.flac.decoder", "flacdec", "audio_decoder.flac" },
     { "OMX.google.flac.encoder", "flacenc", "audio_encoder.flac" },
     { "OMX.google.gsm.decoder", "gsmdec", "audio_decoder.gsm" },
-#ifdef QTI_FLAC_DECODER
-    { "OMX.qti.audio.decoder.flac", "flacdec", "audio_decoder.flac" },
-#endif
-#ifdef DOLBY_ENABLE
-    { "OMX.dolby.ac3.decoder", "ddpdec", "audio_decoder.ac3" },
-    { "OMX.dolby.eac3.decoder", "ddpdec", "audio_decoder.eac3" },
-    { "OMX.dolby.eac3_joc.decoder", "ddpdec", "audio_decoder.eac3_joc" },
-#endif // DOLBY_END
 };
 
 static const size_t kNumComponents =
@@ -101,7 +76,6 @@ OMX_ERRORTYPE SoftOMXPlugin::makeComponentInstance(
         OMX_COMPONENTTYPE **component) {
     ALOGV("makeComponentInstance '%s'", name);
 
-    dlerror(); // clear any existing error
     for (size_t i = 0; i < kNumComponents; ++i) {
         if (strcmp(name, kComponents[i].mName)) {
             continue;
@@ -111,15 +85,27 @@ OMX_ERRORTYPE SoftOMXPlugin::makeComponentInstance(
         libName.append(kComponents[i].mLibNameSuffix);
         libName.append(".so");
 
-        void *libHandle = dlopen(libName.c_str(), RTLD_NOW);
+        // RTLD_NODELETE means we keep the shared library around forever.
+        // this eliminates thrashing during sequences like loading soundpools.
+        // It also leaves the rest of the logic around the dlopen()/dlclose()
+        // calls in this file unchanged.
+        //
+        // Implications of the change:
+        // -- the codec process (where this happens) will have a slightly larger
+        //    long-term memory footprint as it accumulates the loaded shared libraries.
+        //    This is expected to be a small amount of memory.
+        // -- plugin codecs can no longer (and never should have) depend on a
+        //    free reset of any static data as the library would have crossed
+        //    a dlclose/dlopen cycle.
+        //
+
+        void *libHandle = dlopen(libName.c_str(), RTLD_NOW|RTLD_NODELETE);
 
         if (libHandle == NULL) {
             ALOGE("unable to dlopen %s: %s", libName.c_str(), dlerror());
 
             return OMX_ErrorComponentNotFound;
         }
-
-        ALOGV("load component %s for %s", libName.c_str(), name);
 
         typedef SoftOMXComponent *(*CreateSoftOMXComponentFunc)(
                 const char *, const OMX_CALLBACKTYPE *,
@@ -131,8 +117,7 @@ OMX_ERRORTYPE SoftOMXPlugin::makeComponentInstance(
                     "_Z22createSoftOMXComponentPKcPK16OMX_CALLBACKTYPE"
                     "PvPP17OMX_COMPONENTTYPE");
 
-        if (const char *error = dlerror()) {
-            ALOGE("unable to dlsym %s: %s", libName.c_str(), error);
+        if (createSoftOMXComponent == NULL) {
             dlclose(libHandle);
             libHandle = NULL;
 

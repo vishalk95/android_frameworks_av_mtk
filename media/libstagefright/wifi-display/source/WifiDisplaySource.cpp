@@ -454,7 +454,7 @@ void WifiDisplaySource::onMessageReceived(const sp<AMessage> &msg) {
                 sp<ABuffer> data;
                 CHECK(msg->findBuffer("data", &data));
 
-                CHECK_LE(channel, 0xffu);
+                CHECK_LE(channel, 0xff);
                 CHECK_LE(data->size(), 0xffffu);
 
                 int32_t sessionID;
@@ -782,7 +782,7 @@ static void GetAudioModes(const char *s, const char *prefix, uint32_t *modes) {
             return;
         }
 
-        char *commaPos = strchr(s, ',');
+        const char *commaPos = strchr(s, ',');
         if (commaPos != NULL) {
             s = commaPos + 1;
 
@@ -911,10 +911,8 @@ status_t WifiDisplaySource::onReceiveM3Response(
 
         bool supportsPCM = (modes & 2) != 0;  // LPCM 2ch 48kHz
 
-        char val[PROPERTY_VALUE_MAX];
         if (supportsPCM
-                && property_get("media.wfd.use-pcm-audio", val, NULL)
-                && (!strcasecmp("true", val) || !strcmp("1", val))) {
+                && property_get_bool("media.wfd.use-pcm-audio", false)) {
             ALOGI("Using PCM audio.");
             mUsingPCMAudio = true;
         } else if (supportsAAC) {
@@ -1669,7 +1667,7 @@ void WifiDisplaySource::disconnectClient2() {
 }
 
 struct WifiDisplaySource::HDCPObserver : public BnHDCPObserver {
-    HDCPObserver(const sp<AMessage> &notify);
+    explicit HDCPObserver(const sp<AMessage> &notify);
 
     virtual void notify(
             int msg, int ext1, int ext2, const Parcel *obj);

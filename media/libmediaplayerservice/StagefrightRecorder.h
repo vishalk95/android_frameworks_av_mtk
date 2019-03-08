@@ -18,10 +18,11 @@
 
 #define STAGEFRIGHT_RECORDER_H_
 
+#include <media/MediaAnalyticsItem.h>
 #include <media/MediaRecorderBase.h>
 #include <camera/CameraParameters.h>
 #include <utils/String8.h>
-#include <media/stagefright/MediaSource.h>
+
 #include <system/audio.h>
 
 #include <MetadataBufferType.h>
@@ -38,16 +39,11 @@ struct MediaWriter;
 class MetaData;
 struct AudioSource;
 class MediaProfiles;
-class IGraphicBufferConsumer;
-class IGraphicBufferProducer;
-class SurfaceMediaSource;
 struct ALooper;
-struct AMessage;
 
 struct StagefrightRecorder : public MediaRecorderBase {
-    StagefrightRecorder(const String16 &opPackageName);
+    explicit StagefrightRecorder(const String16 &opPackageName);
     virtual ~StagefrightRecorder();
-
     virtual status_t init();
     virtual status_t setAudioSource(audio_source_t as);
     virtual status_t setVideoSource(video_source vs);
@@ -58,11 +54,12 @@ struct StagefrightRecorder : public MediaRecorderBase {
     virtual status_t setVideoFrameRate(int frames_per_second);
     virtual status_t setCamera(const sp<hardware::ICamera>& camera, const sp<ICameraRecordingProxy>& proxy);
     virtual status_t setPreviewSurface(const sp<IGraphicBufferProducer>& surface);
-    virtual status_t setInputSurface(const sp<IGraphicBufferConsumer>& surface);
-    virtual status_t setOutputFile(int fd, int64_t offset, int64_t length);
-    virtual status_t setParameters(const String8& params);
-    virtual status_t setListener(const sp<IMediaRecorderClient>& listener);
-    virtual status_t setClientName(const String16& clientName);
+    virtual status_t setInputSurface(const sp<PersistentSurface>& surface);
+    virtual status_t setOutputFile(int fd);
+    virtual status_t setNextOutputFile(int fd);
+    virtual status_t setParameters(const String8 &params);
+    virtual status_t setListener(const sp<IMediaRecorderClient> &listener);
+    virtual status_t setClientName(const String16 &clientName);
     virtual status_t prepare();
     virtual status_t start();
     virtual status_t pause();
@@ -71,15 +68,17 @@ struct StagefrightRecorder : public MediaRecorderBase {
     virtual status_t close();
     virtual status_t reset();
     virtual status_t getMaxAmplitude(int *max);
-    virtual status_t dump(int fd, const Vector<String16>& args) const;
+    virtual status_t getMetrics(Parcel *reply);
+    virtual status_t dump(int fd, const Vector<String16> &args) const;
     // Querying a SurfaceMediaSourcer
     virtual sp<IGraphicBufferProducer> querySurfaceMediaSource() const;
 
-protected:
+private:
+    mutable Mutex mLock;
     sp<hardware::ICamera> mCamera;
     sp<ICameraRecordingProxy> mCameraProxy;
     sp<IGraphicBufferProducer> mPreviewSurface;
-    sp<IGraphicBufferConsumer> mPersistentSurface;
+    sp<PersistentSurface> mPersistentSurface;
     sp<IMediaRecorderClient> mListener;
     String16 mClientName;
     uid_t mClientUid;
@@ -87,6 +86,11 @@ protected:
     sp<MediaWriter> mWriter;
     int mOutputFd;
     sp<AudioSource> mAudioSourceNode;
+
+    MediaAnalyticsItem *mAnalyticsItem;
+    bool mAnalyticsDirty;
+    void resetMetrics();
+    void updateMetrics();
 
     audio_source_t mAudioSource;
     video_source mVideoSource;
@@ -118,7 +122,7 @@ protected:
     int32_t mTotalBitRate;
 
     bool mCaptureFpsEnable;
-    float mCaptureFps;
+    double mCaptureFps;
     int64_t mTimeBetweenCaptureUs;
     sp<CameraSourceTimeLapse> mCameraSourceTimeLapse;
 
@@ -142,7 +146,7 @@ protected:
 
     static const int kMaxHighSpeedFps = 1000;
 
-    virtual status_t prepareInternal();
+    status_t prepareInternal();
     status_t setupMPEG4orWEBMRecording();
     void setupMPEG4orWEBMMetaData(sp<MetaData> *meta);
     status_t setupAMRRecording();
@@ -159,9 +163,7 @@ protected:
     status_t setupMediaSource(sp<MediaSource> *mediaSource);
     status_t setupCameraSource(sp<CameraSource> *cameraSource);
     status_t setupAudioEncoder(const sp<MediaWriter>& writer);
-    status_t setupVideoEncoder(sp<MediaSource> cameraSource, sp<MediaCodecSource> *source);
-    virtual void setupCustomVideoEncoderParams(sp<MediaSource> /*cameraSource*/,
-            sp<AMessage> &/*format*/) {}
+    status_t setupVideoEncoder(const sp<MediaSource>& cameraSource, sp<MediaCodecSource> *source);
 
     // Encoding parameter handling utilities
     status_t setParameter(const String8 &key, const String8 &value);
@@ -170,7 +172,7 @@ protected:
     status_t setParamAudioSamplingRate(int32_t sampleRate);
     status_t setParamAudioTimeScale(int32_t timeScale);
     status_t setParamCaptureFpsEnable(int32_t timeLapseEnable);
-    status_t setParamCaptureFps(float fps);
+    status_t setParamCaptureFps(double fps);
     status_t setParamVideoEncodingBitRate(int32_t bitRate);
     status_t setParamVideoIFramesInterval(int32_t seconds);
     status_t setParamVideoEncoderProfile(int32_t profile);
@@ -195,16 +197,10 @@ protected:
     void clipNumberOfAudioChannels();
     void setDefaultProfileIfNecessary();
     void setDefaultVideoEncoderIfNecessary();
-    virtual status_t handleCustomOutputFormats() {return UNKNOWN_ERROR;}
-    virtual status_t handleCustomRecording() {return UNKNOWN_ERROR;}
-    virtual status_t handleCustomAudioSource(sp<AMessage> /*format*/) {return UNKNOWN_ERROR;}
-    virtual status_t handleCustomAudioEncoder() {return UNKNOWN_ERROR;}
-    virtual sp<MediaSource> setPCMRecording() {return NULL;}
+
 
     StagefrightRecorder(const StagefrightRecorder &);
     StagefrightRecorder &operator=(const StagefrightRecorder &);
-
-    status_t setupWAVERecording();
 };
 
 }  // namespace android

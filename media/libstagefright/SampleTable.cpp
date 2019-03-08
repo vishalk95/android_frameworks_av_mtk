@@ -278,9 +278,9 @@ status_t SampleTable::setSampleToChunkParams(
         return OK;
     }
 
-    if ((kMaxOffset - 8 -
+    if ((off64_t)(kMaxOffset - 8 -
             ((mNumSampleToChunkOffsets - 1) * sizeof(SampleToChunkEntry)))
-            < (size_t)mSampleToChunkOffset) {
+            < mSampleToChunkOffset) {
         return ERROR_MALFORMED;
     }
 
@@ -701,7 +701,13 @@ void SampleTable::buildSampleEntriesTable() {
             }
 
             ++sampleIndex;
-            sampleTime += delta;
+            if (sampleTime > UINT32_MAX - delta) {
+                ALOGE("%u + %u would overflow, clamping",
+                    sampleTime, delta);
+                sampleTime = UINT32_MAX;
+            } else {
+                sampleTime += delta;
+            }
         }
     }
 

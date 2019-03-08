@@ -21,6 +21,7 @@
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/FileSource.h>
 #include <media/stagefright/Utils.h>
+#include <private/android_filesystem_config.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -31,7 +32,6 @@ namespace android {
 
 FileSource::FileSource(const char *filename)
     : mFd(-1),
-      mUri(filename),
       mOffset(0),
       mLength(-1),
       mName("<null>"),
@@ -98,7 +98,6 @@ FileSource::FileSource(int fd, int64_t offset, int64_t length)
             (long long) mOffset,
             (long long) mLength);
 
-    fetchUriFromFd(fd);
 }
 
 FileSource::~FileSource() {
@@ -173,6 +172,7 @@ status_t FileSource::getSize(off64_t *size) {
 }
 
 sp<DecryptHandle> FileSource::DrmInitialization(const char *mime) {
+    if (getuid() == AID_MEDIA_EX) return nullptr; // no DRM in media extractor
     if (mDrmManagerClient == NULL) {
         mDrmManagerClient = new DrmManagerClient();
     }
@@ -230,17 +230,17 @@ ssize_t FileSource::readAtDRM(off64_t offset, void *data, size_t size) {
     }
 }
 
-void FileSource::fetchUriFromFd(int fd) {
-    ssize_t len = 0;
-    char path[PATH_MAX] = {0};
-    char link[PATH_MAX] = {0};
-
-    mUri.clear();
-
-    snprintf(path, PATH_MAX, "/proc/%d/fd/%d", getpid(), fd);
-    if ((len = readlink(path, link, sizeof(link)-1)) != -1) {
-        link[len] = '\0';
-        mUri.setTo(link);
+/* static */
+bool FileSource::requiresDrm(int fd, int64_t offset, int64_t length, const char *mime) {
+    std::unique_ptr<DrmManagerClient> drmClient(new DrmManagerClient());
+    sp<DecryptHandle> decryptHandle =
+            drmClient->openDecryptSession(fd, offset, length, mime);
+    bool requiresDrm = false;
+    if (decryptHandle != nullptr) {
+        requiresDrm = decryptHandle->decryptApiType == DecryptApiType::CONTAINER_BASED;
+        drmClient->closeDecryptSession(decryptHandle);
     }
+    return requiresDrm;
 }
+
 }  // namespace android

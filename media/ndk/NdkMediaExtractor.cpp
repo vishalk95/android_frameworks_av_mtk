@@ -18,8 +18,8 @@
 #define LOG_TAG "NdkMediaExtractor"
 
 
-#include "NdkMediaError.h"
-#include "NdkMediaExtractor.h"
+#include <media/NdkMediaError.h>
+#include <media/NdkMediaExtractor.h>
 #include "NdkMediaFormatPriv.h"
 
 
@@ -86,7 +86,6 @@ media_status_t AMediaExtractor_setDataSource(AMediaExtractor *mData, const char 
     jobject service = NULL;
     if (env == NULL) {
         ALOGE("setDataSource(path) must be called from Java thread");
-        env->ExceptionClear();
         return AMEDIA_ERROR_UNSUPPORTED;
     }
 

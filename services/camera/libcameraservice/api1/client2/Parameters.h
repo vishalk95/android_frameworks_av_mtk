@@ -122,7 +122,9 @@ struct Parameters {
 
     int32_t exposureCompensation;
     bool autoExposureLock;
+    bool autoExposureLockAvailable;
     bool autoWhiteBalanceLock;
+    bool autoWhiteBalanceLockAvailable;
 
     // 3A region types, for use with ANDROID_CONTROL_MAX_REGIONS
     enum region_t {
@@ -135,6 +137,7 @@ struct Parameters {
     Vector<Area> meteringAreas;
 
     int zoom;
+    bool zoomAvailable;
 
     int videoWidth, videoHeight, videoFormat;
     android_dataspace videoDataSpace;
@@ -170,6 +173,10 @@ struct Parameters {
     // Whether the jpeg stream is slower than 30FPS and can slow down preview.
     // When slowJpegMode is true, allowZslMode must be false to avoid slowing down preview.
     bool slowJpegMode;
+    // Whether ZSL reprocess is supported by the device.
+    bool isZslReprocessPresent;
+    // Whether the device supports enableZsl.
+    bool isDeviceZslSupported;
 
     // Overall camera state
     enum State {
@@ -196,6 +203,10 @@ struct Parameters {
     static const CONSTEXPR float ASPECT_RATIO_TOLERANCE = 0.001;
     // Threshold for slow jpeg mode
     static const int64_t kSlowJpegModeThreshold = 33400000LL; // 33.4 ms
+    // Margin for checking FPS
+    static const int32_t FPS_MARGIN = 1;
+    // Max FPS for default parameters
+    static const int32_t MAX_DEFAULT_FPS = 30;
 
     // Full static camera info, object owned by someone else, such as
     // Camera2Device.
@@ -426,7 +437,7 @@ class SharedParameters {
     template<typename S, typename P>
     class BaseLock {
       public:
-        BaseLock(S &p):
+        explicit BaseLock(S &p):
                 mParameters(p.mParameters),
                 mSharedParameters(p) {
             mSharedParameters.mLock.lock();

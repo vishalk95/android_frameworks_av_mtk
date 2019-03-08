@@ -17,6 +17,8 @@
 #ifndef ANDROID_SERVERS_CAMERA_CAMERADEVICEBASE_H
 #define ANDROID_SERVERS_CAMERA_CAMERADEVICEBASE_H
 
+#include <list>
+
 #include <utils/RefBase.h>
 #include <utils/String8.h>
 #include <utils/String16.h>
@@ -28,12 +30,16 @@
 #include "hardware/camera3.h"
 #include "camera/CameraMetadata.h"
 #include "camera/CaptureResult.h"
-#include "common/CameraModule.h"
 #include "gui/IGraphicBufferProducer.h"
 #include "device3/Camera3StreamInterface.h"
 #include "binder/Status.h"
 
 namespace android {
+
+class CameraProviderManager;
+
+// Mapping of output stream index to surface ids
+typedef std::unordered_map<int, std::vector<size_t> > SurfaceMap;
 
 /**
  * Base interface for version >= 2 camera device classes, which interface to
@@ -46,9 +52,9 @@ class CameraDeviceBase : public virtual RefBase {
     /**
      * The device's camera ID
      */
-    virtual int      getId() const = 0;
+    virtual const String8& getId() const = 0;
 
-    virtual status_t initialize(CameraModule *module) = 0;
+    virtual status_t initialize(sp<CameraProviderManager> manager) = 0;
     virtual status_t disconnect() = 0;
 
     virtual status_t dump(int fd, const Vector<String16> &args) = 0;
@@ -70,6 +76,7 @@ class CameraDeviceBase : public virtual RefBase {
      * Output lastFrameNumber is the expected last frame number of the list of requests.
      */
     virtual status_t captureList(const List<const CameraMetadata> &requests,
+                                 const std::list<const SurfaceMap> &surfaceMaps,
                                  int64_t *lastFrameNumber = NULL) = 0;
 
     /**
@@ -85,6 +92,7 @@ class CameraDeviceBase : public virtual RefBase {
      * Output lastFrameNumber is the last frame number of the previous streaming request.
      */
     virtual status_t setStreamingRequestList(const List<const CameraMetadata> &requests,
+                                             const std::list<const SurfaceMap> &surfaceMaps,
                                              int64_t *lastFrameNumber = NULL) = 0;
 
     /**
@@ -111,7 +119,20 @@ class CameraDeviceBase : public virtual RefBase {
             uint32_t width, uint32_t height, int format,
             android_dataspace dataSpace, camera3_stream_rotation_t rotation, int *id,
             int streamSetId = camera3::CAMERA3_STREAM_SET_ID_INVALID,
-            uint32_t consumerUsage = 0) = 0;
+            bool isShared = false, uint64_t consumerUsage = 0) = 0;
+
+    /**
+     * Create an output stream of the requested size, format, rotation and
+     * dataspace with a number of consumers.
+     *
+     * For HAL_PIXEL_FORMAT_BLOB formats, the width and height should be the
+     * logical dimensions of the buffer, not the number of bytes.
+     */
+    virtual status_t createStream(const std::vector<sp<Surface>>& consumers,
+            bool hasDeferredConsumer, uint32_t width, uint32_t height, int format,
+            android_dataspace dataSpace, camera3_stream_rotation_t rotation, int *id,
+            int streamSetId = camera3::CAMERA3_STREAM_SET_ID_INVALID,
+            bool isShared = false, uint64_t consumerUsage = 0) = 0;
 
     /**
      * Create an input stream of width, height, and format.
@@ -121,18 +142,51 @@ class CameraDeviceBase : public virtual RefBase {
     virtual status_t createInputStream(uint32_t width, uint32_t height,
             int32_t format, /*out*/ int32_t *id) = 0;
 
-    /**
-     * Create an input reprocess stream that uses buffers from an existing
-     * output stream.
-     */
-    virtual status_t createReprocessStreamFromStream(int outputId, int *id) = 0;
+    struct StreamInfo {
+        uint32_t width;
+        uint32_t height;
+
+        uint32_t format;
+        bool formatOverridden;
+        uint32_t originalFormat;
+
+        android_dataspace dataSpace;
+        bool dataSpaceOverridden;
+        android_dataspace originalDataSpace;
+
+        StreamInfo() : width(0), height(0), format(0), formatOverridden(false), originalFormat(0),
+                dataSpace(HAL_DATASPACE_UNKNOWN), dataSpaceOverridden(false),
+                originalDataSpace(HAL_DATASPACE_UNKNOWN) {}
+        /**
+         * Check whether the format matches the current or the original one in case
+         * it got overridden.
+         */
+        bool matchFormat(uint32_t clientFormat) const {
+            if ((formatOverridden && (originalFormat == clientFormat)) ||
+                    (format == clientFormat)) {
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Check whether the dataspace matches the current or the original one in case
+         * it got overridden.
+         */
+        bool matchDataSpace(android_dataspace clientDataSpace) const {
+            if ((dataSpaceOverridden && (originalDataSpace == clientDataSpace)) ||
+                    (dataSpace == clientDataSpace)) {
+                return true;
+            }
+            return false;
+        }
+
+    };
 
     /**
      * Get information about a given stream.
      */
-    virtual status_t getStreamInfo(int id,
-            uint32_t *width, uint32_t *height,
-            uint32_t *format, android_dataspace *dataSpace) = 0;
+    virtual status_t getStreamInfo(int id, StreamInfo *streamInfo) = 0;
 
     /**
      * Set stream gralloc buffer transform
@@ -146,12 +200,6 @@ class CameraDeviceBase : public virtual RefBase {
     virtual status_t deleteStream(int id) = 0;
 
     /**
-     * Delete reprocess stream. Must not be called if there are requests in
-     * flight which reference that stream.
-     */
-    virtual status_t deleteReprocessStream(int id) = 0;
-
-    /**
      * Take the currently-defined set of streams and configure the HAL to use
      * them. This is a long-running operation (may be several hundered ms).
      *
@@ -161,7 +209,7 @@ class CameraDeviceBase : public virtual RefBase {
      * - BAD_VALUE if the set of streams was invalid (e.g. fmts or sizes)
      * - INVALID_OPERATION if the device was in the wrong state
      */
-    virtual status_t configureStreams(bool isConstrainedHighSpeed = false) = 0;
+    virtual status_t configureStreams(int operatingMode = 0) = 0;
 
     // get the buffer producer of the input stream
     virtual status_t getInputBufferProducer(
@@ -204,6 +252,7 @@ class CameraDeviceBase : public virtual RefBase {
         virtual void notifyShutter(const CaptureResultExtras &resultExtras,
                 nsecs_t timestamp) = 0;
         virtual void notifyPrepared(int streamId) = 0;
+        virtual void notifyRequestQueueEmpty() = 0;
 
         // Required only for API1
         virtual void notifyAutoFocus(uint8_t newState, int triggerId) = 0;
@@ -265,21 +314,6 @@ class CameraDeviceBase : public virtual RefBase {
     virtual status_t triggerPrecaptureMetering(uint32_t id) = 0;
 
     /**
-     * Abstract interface for clients that want to listen to reprocess buffer
-     * release events
-     */
-    struct BufferReleasedListener : public virtual RefBase {
-        virtual void onBufferReleased(buffer_handle_t *handle) = 0;
-    };
-
-    /**
-     * Push a buffer to be reprocessed into a reprocessing stream, and
-     * provide a listener to call once the buffer is returned by the HAL
-     */
-    virtual status_t pushReprocessBuffer(int reprocessStreamId,
-            buffer_handle_t *buffer, wp<BufferReleasedListener> listener) = 0;
-
-    /**
      * Flush all pending and in-flight requests. Blocks until flush is
      * complete.
      * Output lastFrameNumber is the last frame number of the previous streaming request.
@@ -310,15 +344,16 @@ class CameraDeviceBase : public virtual RefBase {
     virtual status_t prepare(int maxCount, int streamId) = 0;
 
     /**
-     * Get the HAL device version.
-     */
-    virtual uint32_t getDeviceVersion() = 0;
-
-    /**
      * Set the deferred consumer surface and finish the rest of the stream configuration.
      */
-    virtual status_t setConsumerSurface(int streamId, sp<Surface> consumer) = 0;
+    virtual status_t setConsumerSurfaces(int streamId,
+            const std::vector<sp<Surface>>& consumers) = 0;
 
+    /**
+     * Drop buffers for stream of streamId if dropping is true. If dropping is false, do not
+     * drop buffers for stream of streamId.
+     */
+    virtual status_t dropStreamBuffers(bool /*dropping*/, int /*streamId*/) = 0;
 };
 
 }; // namespace android

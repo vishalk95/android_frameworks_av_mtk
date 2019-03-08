@@ -19,7 +19,6 @@
 #define LOG_TAG "MetadataRetrieverClient"
 #include <utils/Log.h>
 
-#include <inttypes.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -135,7 +134,8 @@ status_t MetadataRetrieverClient::setDataSource(
 
 status_t MetadataRetrieverClient::setDataSource(int fd, int64_t offset, int64_t length)
 {
-    ALOGV("setDataSource fd=%d, offset=%" PRId64 ", length=%" PRId64 "", fd, offset, length);
+    ALOGV("setDataSource fd=%d (%s), offset=%lld, length=%lld",
+            fd, nameForFd(fd).c_str(), (long long) offset, (long long) length);
     Mutex::Autolock lock(mLock);
     struct stat sb;
     int ret = fstat(fd, &sb);
@@ -143,19 +143,20 @@ status_t MetadataRetrieverClient::setDataSource(int fd, int64_t offset, int64_t 
         ALOGE("fstat(%d) failed: %d, %s", fd, ret, strerror(errno));
         return BAD_VALUE;
     }
-    ALOGV("st_dev  = %" PRIu64 "", static_cast<uint64_t>(sb.st_dev));
+    ALOGV("st_dev  = %llu", static_cast<unsigned long long>(sb.st_dev));
     ALOGV("st_mode = %u", sb.st_mode);
     ALOGV("st_uid  = %lu", static_cast<unsigned long>(sb.st_uid));
     ALOGV("st_gid  = %lu", static_cast<unsigned long>(sb.st_gid));
-    ALOGV("st_size = %" PRIu64 "", sb.st_size);
+    ALOGV("st_size = %llu", static_cast<unsigned long long>(sb.st_size));
 
     if (offset >= sb.st_size) {
-        ALOGE("offset (%" PRId64 ") bigger than file size (%" PRIu64 ")", offset, sb.st_size);
+        ALOGE("offset (%lld) bigger than file size (%llu)",
+                (long long)offset, (unsigned long long)sb.st_size);
         return BAD_VALUE;
     }
     if (offset + length > sb.st_size) {
         length = sb.st_size - offset;
-        ALOGV("calculated length = %" PRId64 "", length);
+        ALOGV("calculated length = %lld", (long long)length);
     }
 
     player_type playerType =
@@ -174,7 +175,7 @@ status_t MetadataRetrieverClient::setDataSource(int fd, int64_t offset, int64_t 
 }
 
 status_t MetadataRetrieverClient::setDataSource(
-        const sp<IDataSource>& source)
+        const sp<IDataSource>& source, const char *mime)
 {
     ALOGV("setDataSource(IDataSource)");
     Mutex::Autolock lock(mLock);
@@ -185,16 +186,18 @@ status_t MetadataRetrieverClient::setDataSource(
     ALOGV("player type = %d", playerType);
     sp<MediaMetadataRetrieverBase> p = createRetriever(playerType);
     if (p == NULL) return NO_INIT;
-    status_t ret = p->setDataSource(dataSource);
+    status_t ret = p->setDataSource(dataSource, mime);
     if (ret == NO_ERROR) mRetriever = p;
     return ret;
 }
 
 Mutex MetadataRetrieverClient::sLock;
 
-sp<IMemory> MetadataRetrieverClient::getFrameAtTime(int64_t timeUs, int option)
+sp<IMemory> MetadataRetrieverClient::getFrameAtTime(
+        int64_t timeUs, int option, int colorFormat, bool metaOnly)
 {
-    ALOGV("getFrameAtTime: time(%" PRId64 " us) option(%d)", timeUs, option);
+    ALOGV("getFrameAtTime: time(%lld us) option(%d) colorFormat(%d), metaOnly(%d)",
+            (long long)timeUs, option, colorFormat, metaOnly);
     Mutex::Autolock lock(mLock);
     Mutex::Autolock glock(sLock);
     mThumbnail.clear();
@@ -202,12 +205,13 @@ sp<IMemory> MetadataRetrieverClient::getFrameAtTime(int64_t timeUs, int option)
         ALOGE("retriever is not initialized");
         return NULL;
     }
-    VideoFrame *frame = mRetriever->getFrameAtTime(timeUs, option);
+    VideoFrame *frame = mRetriever->getFrameAtTime(
+            timeUs, option, colorFormat, metaOnly);
     if (frame == NULL) {
         ALOGE("failed to capture a video frame");
         return NULL;
     }
-    size_t size = sizeof(VideoFrame) + frame->mSize;
+    size_t size = frame->getFlattenedSize();
     sp<MemoryHeapBase> heap = new MemoryHeapBase(size, 0, "MetadataRetrieverClient");
     if (heap == NULL) {
         ALOGE("failed to create MemoryDealer");
@@ -221,16 +225,7 @@ sp<IMemory> MetadataRetrieverClient::getFrameAtTime(int64_t timeUs, int option)
         return NULL;
     }
     VideoFrame *frameCopy = static_cast<VideoFrame *>(mThumbnail->pointer());
-    frameCopy->mWidth = frame->mWidth;
-    frameCopy->mHeight = frame->mHeight;
-    frameCopy->mDisplayWidth = frame->mDisplayWidth;
-    frameCopy->mDisplayHeight = frame->mDisplayHeight;
-    frameCopy->mSize = frame->mSize;
-    frameCopy->mRotationAngle = frame->mRotationAngle;
-    ALOGV("rotation: %d", frameCopy->mRotationAngle);
-    frameCopy->mData = (uint8_t *)frameCopy + sizeof(VideoFrame);
-    memcpy(frameCopy->mData, frame->mData, frame->mSize);
-    frameCopy->mData = 0;
+    frameCopy->copyFlattened(*frame);
     delete frame;  // Fix memory leakage
     return mThumbnail;
 }

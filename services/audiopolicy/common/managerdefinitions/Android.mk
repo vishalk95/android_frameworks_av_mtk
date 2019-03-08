@@ -25,31 +25,27 @@ LOCAL_SRC_FILES:= \
 
 LOCAL_SHARED_LIBRARIES := \
     libcutils \
+    libmedia \
     libutils \
     liblog \
 
+LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := libmedia
+
 LOCAL_C_INCLUDES := \
     $(LOCAL_PATH)/include \
-    $(TOPDIR)frameworks/av/services/audiopolicy/common/include \
-    $(TOPDIR)frameworks/av/services/audiopolicy \
-    $(TOPDIR)frameworks/av/services/audiopolicy/utilities \
+    frameworks/av/services/audiopolicy/common/include \
+    frameworks/av/services/audiopolicy \
+    frameworks/av/services/audiopolicy/utilities \
 
-ifeq ($(call is-vendor-board-platform,QCOM),true)
-ifeq ($(strip $(AUDIO_FEATURE_ENABLED_EXTN_FORMATS)),true)
-LOCAL_CFLAGS     += -DAUDIO_EXTN_FORMATS_ENABLED
-endif
-endif
 ifeq ($(USE_XML_AUDIO_POLICY_CONF), 1)
 
 LOCAL_SRC_FILES += src/Serializer.cpp
 
-LOCAL_STATIC_LIBRARIES += libxml2
-
-LOCAL_SHARED_LIBRARIES += libicuuc
+LOCAL_SHARED_LIBRARIES += libicuuc libxml2
 
 LOCAL_C_INCLUDES += \
-    $(TOPDIR)external/libxml2/include \
-    $(TOPDIR)external/icu/icu4c/source/common
+    external/libxml2/include \
+    external/icu/icu4c/source/common
 
 else
 
@@ -60,18 +56,12 @@ LOCAL_SRC_FILES += \
 
 endif #ifeq ($(USE_XML_AUDIO_POLICY_CONF), 1)
 
-ifeq ($(call is-vendor-board-platform,QCOM),true)
-ifneq ($(strip $(AUDIO_FEATURE_ENABLED_PROXY_DEVICE)),false)
-LOCAL_CFLAGS += -DAUDIO_EXTN_AFE_PROXY_ENABLED
-endif
-endif
-
 LOCAL_EXPORT_C_INCLUDE_DIRS := \
     $(LOCAL_PATH)/include
 
 LOCAL_MULTILIB := $(AUDIOSERVER_MULTILIB)
 
-LOCAL_CFLAGS += -Wall -Werror
+LOCAL_CFLAGS := -Wall -Werror
 
 LOCAL_MODULE := libaudiopolicycomponents
 

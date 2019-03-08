@@ -25,7 +25,6 @@
 #include <media/AudioBufferProvider.h>
 #include <utils/Log.h>
 #include <utils/Trace.h>
-#include "AudioFlinger.h"
 #include "FastCapture.h"
 
 namespace android {
@@ -58,7 +57,7 @@ const FastThreadState *FastCapture::poll()
     return mSQ.poll();
 }
 
-void FastCapture::setLog(NBLog::Writer *logWriter __unused)
+void FastCapture::setNBLogWriter(NBLog::Writer *logWriter __unused)
 {
 }
 

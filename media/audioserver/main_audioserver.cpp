@@ -12,25 +12,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * This file was modified by Dolby Laboratories, Inc. The portions of the
- * code that are surrounded by "DOLBY..." are copyrighted and
- * licensed separately, as follows:
- *
- *  (C) 2016 Dolby Laboratories, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
  */
 
 #define LOG_TAG "audioserver"
@@ -46,15 +27,18 @@
 #include <binder/IServiceManager.h>
 #include <utils/Log.h>
 
+// FIXME: remove when BUG 31748996 is fixed
+#include <hwbinder/IPCThreadState.h>
+#include <hwbinder/ProcessState.h>
+
 // from LOCAL_C_INCLUDES
+#include "aaudio/AAudioTesting.h"
 #include "AudioFlinger.h"
 #include "AudioPolicyService.h"
+#include "AAudioService.h"
+#include "utility/AAudioUtilities.h"
 #include "MediaLogService.h"
-#include "RadioService.h"
 #include "SoundTriggerHwService.h"
-#ifdef DOLBY_ENABLE
-#include "DolbyMemoryService.h"
-#endif
 
 using namespace android;
 
@@ -149,12 +133,22 @@ int main(int argc __unused, char **argv)
         ALOGI("ServiceManager: %p", sm.get());
         AudioFlinger::instantiate();
         AudioPolicyService::instantiate();
-        RadioService::instantiate();
-#ifdef DOLBY_ENABLE
-        DolbyMemoryService::instantiate();
-#endif
+
+        // AAudioService should only be used in OC-MR1 and later.
+        // And only enable the AAudioService if the system MMAP policy explicitly allows it.
+        // This prevents a client from misusing AAudioService when it is not supported.
+        aaudio_policy_t mmapPolicy = property_get_int32(AAUDIO_PROP_MMAP_POLICY,
+                                                        AAUDIO_POLICY_NEVER);
+        if (mmapPolicy == AAUDIO_POLICY_AUTO || mmapPolicy == AAUDIO_POLICY_ALWAYS) {
+            AAudioService::instantiate();
+        }
+
         SoundTriggerHwService::instantiate();
         ProcessState::self()->startThreadPool();
+
+// FIXME: remove when BUG 31748996 is fixed
+        android::hardware::ProcessState::self()->startThreadPool();
+
         IPCThreadState::self()->joinThreadPool();
     }
 }

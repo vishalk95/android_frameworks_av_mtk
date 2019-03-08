@@ -12,25 +12,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * This file was modified by Dolby Laboratories, Inc. The portions of the
- * code that are surrounded by "DOLBY..." are copyrighted and
- * licensed separately, as follows:
- *
- *  (C) 2015-2016 Dolby Laboratories, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
  */
 
 #ifndef NUPLAYER_DECODER_H_
@@ -42,10 +23,13 @@
 
 namespace android {
 
+class MediaCodecBuffer;
+
 struct NuPlayer::Decoder : public DecoderBase {
     Decoder(const sp<AMessage> &notify,
             const sp<Source> &source,
             pid_t pid,
+            uid_t uid,
             const sp<Renderer> &renderer = NULL,
             const sp<Surface> &surface = NULL,
             const sp<CCDecoder> &ccDecoder = NULL);
@@ -55,6 +39,8 @@ struct NuPlayer::Decoder : public DecoderBase {
     // sets the output surface of video decoders.
     virtual status_t setVideoSurface(const sp<Surface> &surface);
 
+    virtual status_t releaseCrypto();
+
 protected:
     virtual ~Decoder();
 
@@ -63,17 +49,18 @@ protected:
     virtual void onConfigure(const sp<AMessage> &format);
     virtual void onSetParameters(const sp<AMessage> &params);
     virtual void onSetRenderer(const sp<Renderer> &renderer);
-    virtual void onGetInputBuffers(Vector<sp<ABuffer> > *dstBuffers);
     virtual void onResume(bool notifyComplete);
     virtual void onFlush();
     virtual void onShutdown(bool notifyComplete);
     virtual bool doRequestBuffers();
-    virtual void setPcmFormat(const sp<AMessage> & /*format*/) {}
 
+private:
     enum {
         kWhatCodecNotify         = 'cdcN',
         kWhatRenderBuffer        = 'rndr',
-        kWhatSetVideoSurface     = 'sSur'
+        kWhatSetVideoSurface     = 'sSur',
+        kWhatAudioOutputFormatChanged = 'aofc',
+        kWhatDrmReleaseCrypto    = 'rDrm',
     };
 
     enum {
@@ -93,8 +80,8 @@ protected:
 
     List<sp<AMessage> > mPendingInputMessages;
 
-    Vector<sp<ABuffer> > mInputBuffers;
-    Vector<sp<ABuffer> > mOutputBuffers;
+    Vector<sp<MediaCodecBuffer> > mInputBuffers;
+    Vector<sp<MediaCodecBuffer> > mOutputBuffers;
     Vector<sp<ABuffer> > mCSDsForCurrentFormat;
     Vector<sp<ABuffer> > mCSDsToSubmit;
     Vector<bool> mInputBufferIsDequeued;
@@ -102,6 +89,7 @@ protected:
     Vector<size_t> mDequeuedInputBuffers;
 
     const pid_t mPid;
+    const uid_t mUid;
     int64_t mSkipRenderingUntilMediaTimeUs;
     int64_t mNumFramesTotal;
     int64_t mNumInputFramesDropped;
@@ -111,6 +99,8 @@ protected:
     bool mIsAudio;
     bool mIsVideoAVC;
     bool mIsSecure;
+    bool mIsEncrypted;
+    bool mIsEncryptedObservedEarlier;
     bool mFormatChangePending;
     bool mTimeChangePending;
     float mFrameRateTotal;
@@ -131,7 +121,7 @@ protected:
             size_t size,
             int64_t timeUs,
             int32_t flags);
-    virtual void handleOutputFormatChange(const sp<AMessage> &format);
+    void handleOutputFormatChange(const sp<AMessage> &format);
 
     void releaseAndResetMediaBuffers();
     void requestCodecNotification();
@@ -149,9 +139,8 @@ protected:
     void finishHandleDiscontinuity(bool flushOnTimeChange);
 
     void notifyResumeCompleteIfNecessary();
-#ifdef DOLBY_ENABLE
-    void setDolbyMessage();
-#endif // DOLBY_END
+
+    void onReleaseCrypto(const sp<AMessage>& msg);
 
     DISALLOW_EVIL_CONSTRUCTORS(Decoder);
 };

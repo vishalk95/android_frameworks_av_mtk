@@ -528,9 +528,8 @@ void ID3::Iterator::getString(String8 *id, String8 *comment) const {
 void ID3::Iterator::getstring(String8 *id, bool otherdata) const {
     id->setTo("");
 
-    size_t size = 0;
-    const uint8_t *frameData = getData(&size);
-    if ((frameData == NULL) || (size == 0)) {
+    const uint8_t *frameData = mFrameData;
+    if (frameData == NULL) {
         return;
     }
 
@@ -540,7 +539,7 @@ void ID3::Iterator::getstring(String8 *id, bool otherdata) const {
         if (mOffset == 126 || mOffset == 127) {
             // Special treatment for the track number and genre.
             char tmp[16];
-            sprintf(tmp, "%d", (int)*frameData);
+            snprintf(tmp, sizeof(tmp), "%d", (int)*frameData);
 
             id->setTo(tmp);
             return;
@@ -557,6 +556,9 @@ void ID3::Iterator::getstring(String8 *id, bool otherdata) const {
     }
     size_t n = mFrameSize - getHeaderLength() - 1;
     if (otherdata) {
+        if (n < 5) {
+            return;
+        }
         // skip past the encoding, language, and the 0 separator
         frameData += 4;
         int32_t i = n - 4;

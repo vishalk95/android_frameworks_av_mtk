@@ -18,13 +18,13 @@
 
 #include <set>
 #include <hardware/camera3.h>
-#include <NdkCameraDevice.h>
+#include <camera/NdkCameraDevice.h>
 #include "ACameraDevice.h"
 
 using namespace android;
 
 struct ACaptureSessionOutput {
-    ACaptureSessionOutput(ANativeWindow* window) : mWindow(window) {};
+    explicit ACaptureSessionOutput(ANativeWindow* window) : mWindow(window) {};
 
     bool operator == (const ACaptureSessionOutput& other) const {
         return mWindow == other.mWindow;

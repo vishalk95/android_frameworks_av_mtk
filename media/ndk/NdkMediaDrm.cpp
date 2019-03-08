@@ -17,7 +17,7 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "NdkMediaDrm"
 
-#include "NdkMediaDrm.h"
+#include <media/NdkMediaDrm.h>
 
 #include <cutils/properties.h>
 #include <utils/Log.h>
@@ -29,7 +29,7 @@
 #include <media/stagefright/MediaErrors.h>
 #include <binder/IServiceManager.h>
 #include <media/IMediaDrmService.h>
-#include <ndk/NdkMediaCrypto.h>
+#include <media/NdkMediaCrypto.h>
 
 
 using namespace android;
@@ -99,11 +99,12 @@ void DrmListener::notify(DrmPlugin::EventType eventType, int extra, const Parcel
             break;
         default:
             ALOGE("Invalid event DrmPlugin::EventType %d, ignored", (int)eventType);
-            return;
+            goto cleanup;
     }
 
     (*mListener)(mObj, &sessionId, ndkEventType, extra, data, dataSize);
 
+ cleanup:
     delete [] sessionId.ptr;
     delete [] data;
 }
@@ -171,7 +172,8 @@ static sp<IDrm> CreateDrmFromUUID(const AMediaUUID uuid) {
         return NULL;
     }
 
-    status_t err = drm->createPlugin(uuid);
+    String8 nullPackageName;
+    status_t err = drm->createPlugin(uuid, nullPackageName);
 
     if (err != OK) {
         return NULL;
@@ -419,7 +421,7 @@ media_status_t AMediaDrm_queryKeyStatus(AMediaDrm *mObj, const AMediaDrmSessionI
 
     for (size_t i = 0; i < mObj->mQueryResults.size(); i++) {
         keyValuePairs[i].mKey = mObj->mQueryResults.keyAt(i).string();
-        keyValuePairs[i].mValue = mObj->mQueryResults.keyAt(i).string();
+        keyValuePairs[i].mValue = mObj->mQueryResults.valueAt(i).string();
     }
     *numPairs = mObj->mQueryResults.size();
     return AMEDIA_OK;

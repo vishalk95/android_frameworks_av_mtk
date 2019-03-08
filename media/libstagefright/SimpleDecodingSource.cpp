@@ -17,7 +17,7 @@
 #include <gui/Surface.h>
 
 #include <media/ICrypto.h>
-#include <media/stagefright/foundation/ABuffer.h>
+#include <media/MediaCodecBuffer.h>
 #include <media/stagefright/MediaDefs.h>
 #include <media/stagefright/foundation/ALooper.h>
 #include <media/stagefright/foundation/AMessage.h>
@@ -33,6 +33,12 @@ using namespace android;
 
 const int64_t kTimeoutWaitForOutputUs = 500000; // 0.5 seconds
 const int64_t kTimeoutWaitForInputUs = 5000; // 5 milliseconds
+
+//static
+sp<SimpleDecodingSource> SimpleDecodingSource::Create(
+        const sp<IMediaSource> &source, uint32_t flags) {
+    return SimpleDecodingSource::Create(source, flags, nullptr, nullptr);
+}
 
 //static
 sp<SimpleDecodingSource> SimpleDecodingSource::Create(
@@ -230,7 +236,7 @@ status_t SimpleDecodingSource::doRead(
                 break;
             }
 
-            sp<ABuffer> in_buffer;
+            sp<MediaCodecBuffer> in_buffer;
             if (res == OK) {
                 res = mCodec->getInputBuffer(in_ix, &in_buffer);
             }
@@ -344,7 +350,7 @@ status_t SimpleDecodingSource::doRead(
             return res;
         }
 
-        sp<ABuffer> out_buffer;
+        sp<MediaCodecBuffer> out_buffer;
         res = mCodec->getOutputBuffer(out_ix, &out_buffer);
         if (res != OK) {
             ALOGW("[%s] could not get output buffer #%zu",

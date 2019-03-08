@@ -18,6 +18,7 @@
 
 #define LIVE_SESSION_H_
 
+#include <media/BufferingSettings.h>
 #include <media/stagefright/foundation/AHandler.h>
 #include <media/mediaplayer.h>
 
@@ -72,8 +73,10 @@ struct LiveSession : public AHandler {
             uint32_t flags,
             const sp<IMediaHTTPService> &httpService);
 
+    void setBufferingSettings(const BufferingSettings &buffering);
+
     int64_t calculateMediaTimeUs(int64_t firstTimeUs, int64_t timeUs, int32_t discontinuitySeq);
-    virtual status_t dequeueAccessUnit(StreamType stream, sp<ABuffer> *accessUnit);
+    status_t dequeueAccessUnit(StreamType stream, sp<ABuffer> *accessUnit);
 
     status_t getStreamFormatMeta(StreamType stream, sp<MetaData> *meta);
 
@@ -86,7 +89,7 @@ struct LiveSession : public AHandler {
     status_t disconnect();
 
     // Blocks until seek is complete.
-    status_t seekTo(int64_t timeUs);
+    status_t seekTo(int64_t timeUs, MediaPlayerSeekMode mode);
 
     status_t getDuration(int64_t *durationUs) const;
     size_t getTrackCount() const;
@@ -117,6 +120,7 @@ protected:
 
     virtual void onMessageReceived(const sp<AMessage> &msg);
 
+private:
     friend struct PlaylistFetcher;
 
     enum {
@@ -128,6 +132,7 @@ protected:
         kWhatChangeConfiguration2       = 'chC2',
         kWhatChangeConfiguration3       = 'chC3',
         kWhatPollBuffering              = 'poll',
+        kWhatSetBufferingSettings       = 'sBuS',
     };
 
     // Bandwidth Switch Mark Defaults
@@ -137,17 +142,7 @@ protected:
     static const int64_t kResumeThresholdUs;
 
     // Buffer Prepare/Ready/Underflow Marks
-    static const int64_t kReadyMarkUs;
-    static const int64_t kPrepareMarkUs;
-    static const int64_t kUnderflowMarkUs;
-
-    struct BandwidthBaseEstimator : public RefBase {
-        virtual void addBandwidthMeasurement(size_t numBytes, int64_t delayUs) = 0;
-        virtual bool estimateBandwidth(
-                int32_t *bandwidth,
-                bool *isStable = NULL,
-                int32_t *shortTermBps = NULL) = 0;
-    };
+    BufferingSettings mBufferingSettings;
 
     struct BandwidthEstimator;
     struct BandwidthItem {
@@ -172,7 +167,7 @@ protected:
         int64_t mLastSampleDurationUs;
         StreamItem()
             : StreamItem("") {}
-        StreamItem(const char *type)
+        explicit StreamItem(const char *type)
             : mType(type),
               mSeekMode(kSeekModeExactPosition) {
                   reset();
@@ -208,7 +203,7 @@ protected:
     ssize_t mOrigBandwidthIndex;
     int32_t mLastBandwidthBps;
     bool mLastBandwidthStable;
-    sp<BandwidthBaseEstimator> mBandwidthEstimator;
+    sp<BandwidthEstimator> mBandwidthEstimator;
 
     sp<M3UParser> mPlaylist;
     int32_t mMaxWidth;
@@ -258,10 +253,10 @@ protected:
     KeyedVector<size_t, int64_t> mDiscontinuityAbsStartTimesUs;
     KeyedVector<size_t, int64_t> mDiscontinuityOffsetTimesUs;
 
-    virtual sp<PlaylistFetcher> addFetcher(const char *uri);
+    sp<PlaylistFetcher> addFetcher(const char *uri);
 
     void onConnect(const sp<AMessage> &msg);
-    virtual void onMasterPlaylistFetched(const sp<AMessage> &msg);
+    void onMasterPlaylistFetched(const sp<AMessage> &msg);
     void onSeek(const sp<AMessage> &msg);
 
     bool UriIsSameAsIndex( const AString &uri, int32_t index, bool newUri);
@@ -276,7 +271,7 @@ protected:
     float getAbortThreshold(
             ssize_t currentBWIndex, ssize_t targetBWIndex) const;
     void addBandwidthMeasurement(size_t numBytes, int64_t delayUs);
-    virtual size_t getBandwidthIndex(int32_t bandwidthBps);
+    size_t getBandwidthIndex(int32_t bandwidthBps);
     ssize_t getLowestValidBandwidthIndex() const;
     HLSTime latestMediaSegmentStartTime() const;
 
@@ -291,7 +286,7 @@ protected:
     void onChangeConfiguration2(const sp<AMessage> &msg);
     void onChangeConfiguration3(const sp<AMessage> &msg);
 
-    virtual void swapPacketSource(StreamType stream);
+    void swapPacketSource(StreamType stream);
     void tryToFinishBandwidthSwitch(const AString &oldUri);
     void cancelBandwidthSwitch(bool resume = false);
     bool checkSwitchProgress(
@@ -303,7 +298,7 @@ protected:
     void schedulePollBuffering();
     void cancelPollBuffering();
     void restartPollBuffering();
-    virtual void onPollBuffering();
+    void onPollBuffering();
     bool checkBuffering(bool &underflow, bool &ready, bool &down, bool &up);
     void startBufferingIfNecessary();
     void stopBufferingIfNecessary();
@@ -311,7 +306,7 @@ protected:
 
     void finishDisconnect();
 
-    virtual void postPrepared(status_t err);
+    void postPrepared(status_t err);
     void postError(status_t err);
 
     DISALLOW_EVIL_CONSTRUCTORS(LiveSession);

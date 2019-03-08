@@ -19,6 +19,7 @@
 #define PLAYLIST_FETCHER_H_
 
 #include <media/stagefright/foundation/AHandler.h>
+#include <openssl/aes.h>
 
 #include "mpeg2ts/ATSParser.h"
 #include "LiveSession.h"
@@ -89,6 +90,7 @@ protected:
     virtual ~PlaylistFetcher();
     virtual void onMessageReceived(const sp<AMessage> &msg);
 
+private:
     enum {
         kMaxNumRetries         = 5,
     };
@@ -174,7 +176,10 @@ protected:
     // Stores the initialization vector to decrypt the next block of cipher text, which can
     // either be derived from the sequence number, read from the manifest, or copied from
     // the last block of cipher text (cipher-block chaining).
-    unsigned char mAESInitVec[16];
+    unsigned char mAESInitVec[AES_BLOCK_SIZE];
+    unsigned char mKeyData[AES_BLOCK_SIZE];
+    bool mSampleAesKeyItemChanged;
+    sp<AMessage> mSampleAesKeyItem;
 
     Mutex mThresholdLock;
     float mThresholdRatio;
@@ -217,6 +222,9 @@ protected:
     void onStop(const sp<AMessage> &msg);
     void onMonitorQueue();
     void onDownloadNext();
+    void initSeqNumberForLiveStream(
+            int32_t &firstSeqNumberInPlaylist,
+            int32_t &lastSeqNumberInPlaylist);
     bool initDownloadState(
             AString &uri,
             sp<AMessage> &itemMeta,
@@ -248,8 +256,6 @@ protected:
 
     void updateDuration();
     void updateTargetDuration();
-    virtual bool checkSwitchBandwidth() { return false; }
-    virtual bool getSeqNumberInLiveStreaming() { return false; }
 
     DISALLOW_EVIL_CONSTRUCTORS(PlaylistFetcher);
 };

@@ -81,8 +81,7 @@ void ARTPConnection::addStream(
         const sp<ASessionDescription> &sessionDesc,
         size_t index,
         const sp<AMessage> &notify,
-        bool injected,
-        bool isIPV6) {
+        bool injected) {
     sp<AMessage> msg = new AMessage(kWhatAddStream, this);
     msg->setInt32("rtp-socket", rtpSocket);
     msg->setInt32("rtcp-socket", rtcpSocket);
@@ -90,7 +89,6 @@ void ARTPConnection::addStream(
     msg->setSize("index", index);
     msg->setMessage("notify", notify);
     msg->setInt32("injected", injected);
-    msg->setInt32("isIPV6", isIPV6);
     msg->post();
 }
 
@@ -145,10 +143,6 @@ void ARTPConnection::MakePortPair(
     }
 
     TRESPASS();
-}
-
-size_t ARTPConnection::sockAddrSize() {
-    return sizeof(struct sockaddr_in);
 }
 
 void ARTPConnection::onMessageReceived(const sp<AMessage> &msg) {
@@ -351,7 +345,7 @@ void ARTPConnection::onPollStreams() {
                     n = sendto(
                         s->mRTCPSocket, buffer->data(), buffer->size(), 0,
                         (const struct sockaddr *)&s->mRemoteRTCPAddr,
-                        sockAddrSize());
+                        sizeof(s->mRemoteRTCPAddr));
                 } while (n < 0 && errno == EINTR);
 
                 if (n <= 0) {

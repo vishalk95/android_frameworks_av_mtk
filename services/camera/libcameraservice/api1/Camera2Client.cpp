@@ -56,7 +56,8 @@ Camera2Client::Camera2Client(const sp<CameraService>& cameraService,
         int servicePid,
         bool legacyMode):
         Camera2ClientBase(cameraService, cameraClient, clientPackageName,
-                cameraId, cameraFacing, clientPid, clientUid, servicePid),
+                String8::format("%d", cameraId), cameraFacing,
+                clientPid, clientUid, servicePid),
         mParameters(cameraId, cameraFacing)
 {
     ATRACE_CALL();
@@ -67,13 +68,32 @@ Camera2Client::Camera2Client(const sp<CameraService>& cameraService,
     mLegacyMode = legacyMode;
 }
 
-status_t Camera2Client::initialize(CameraModule *module)
+status_t Camera2Client::initialize(sp<CameraProviderManager> manager) {
+    return initializeImpl(manager);
+}
+
+bool Camera2Client::isZslEnabledInStillTemplate() {
+    bool zslEnabled = false;
+    CameraMetadata stillTemplate;
+    status_t res = mDevice->createDefaultRequest(CAMERA2_TEMPLATE_STILL_CAPTURE, &stillTemplate);
+    if (res == OK) {
+        camera_metadata_entry_t enableZsl = stillTemplate.find(ANDROID_CONTROL_ENABLE_ZSL);
+        if (enableZsl.count == 1) {
+            zslEnabled = (enableZsl.data.u8[0] == ANDROID_CONTROL_ENABLE_ZSL_TRUE);
+        }
+    }
+
+    return zslEnabled;
+}
+
+template<typename TProviderPtr>
+status_t Camera2Client::initializeImpl(TProviderPtr providerPtr)
 {
     ATRACE_CALL();
     ALOGV("%s: Initializing client for camera %d", __FUNCTION__, mCameraId);
     status_t res;
 
-    res = Camera2ClientBase::initialize(module);
+    res = Camera2ClientBase::initialize(providerPtr);
     if (res != OK) {
         return res;
     }
@@ -87,6 +107,8 @@ status_t Camera2Client::initialize(CameraModule *module)
                     __FUNCTION__, mCameraId, strerror(-res), res);
             return NO_INIT;
         }
+
+        l.mParameters.isDeviceZslSupported = isZslEnabledInStillTemplate();
     }
 
     String8 threadName;
@@ -430,10 +452,9 @@ binder::Status Camera2Client::disconnect() {
 
     ALOGV("Camera %d: Disconnecting device", mCameraId);
 
-    if (mDevice != nullptr) {
-        mDevice->disconnect();
-        mDevice.clear();
-    }
+    mDevice->disconnect();
+
+    mDevice.clear();
 
     CameraService::Client::disconnect();
 
@@ -527,7 +548,7 @@ status_t Camera2Client::setPreviewTarget(
 }
 
 status_t Camera2Client::setPreviewWindowL(const sp<IBinder>& binder,
-        sp<Surface> window) {
+        const sp<Surface>& window) {
     ATRACE_CALL();
     status_t res;
 
@@ -838,6 +859,12 @@ status_t Camera2Client::startPreviewL(Parameters &params, bool restart) {
 
     outputStreams.push(getPreviewStreamId());
 
+    if (params.isDeviceZslSupported) {
+        // If device ZSL is supported, resume preview buffers that may be paused
+        // during last takePicture().
+        mDevice->dropStreamBuffers(false, getPreviewStreamId());
+    }
+
     if (!params.recordingHint) {
         if (!restart) {
             res = mStreamingProcessor->updatePreviewRequest(params);
@@ -879,7 +906,6 @@ void Camera2Client::stopPreview() {
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return;
-    if (mDevice == 0) return;
     stopPreviewL();
 }
 
@@ -995,7 +1021,7 @@ status_t Camera2Client::startRecording() {
 }
 
 status_t Camera2Client::startRecordingL(Parameters &params, bool restart) {
-    status_t res;
+    status_t res = OK;
 
     ALOGV("%s: state == %d, restart = %d", __FUNCTION__, params.state, restart);
 
@@ -1036,7 +1062,7 @@ status_t Camera2Client::startRecordingL(Parameters &params, bool restart) {
     }
 
     if (!restart) {
-        mCameraService->playSound(CameraService::SOUND_RECORDING_START);
+        sCameraService->playSound(CameraService::SOUND_RECORDING_START);
         mStreamingProcessor->updateRecordingRequest(params);
         if (res != OK) {
             ALOGE("%s: Camera %d: Unable to update recording request: %s (%d)",
@@ -1193,7 +1219,7 @@ void Camera2Client::stopRecording() {
             return;
     };
 
-    mCameraService->playSound(CameraService::SOUND_RECORDING_STOP);
+    sCameraService->playSound(CameraService::SOUND_RECORDING_STOP);
 
     // Remove recording stream because the video target may be abandoned soon.
     res = stopStream();
@@ -1249,6 +1275,13 @@ void Camera2Client::releaseRecordingFrame(const sp<IMemory>& mem) {
 
 void Camera2Client::releaseRecordingFrameHandle(native_handle_t *handle) {
     (void)handle;
+    ATRACE_CALL();
+    ALOGW("%s: Not supported in buffer queue mode.", __FUNCTION__);
+}
+
+void Camera2Client::releaseRecordingFrameHandleBatch(
+        const std::vector<native_handle_t*>& handles) {
+    (void)handles;
     ATRACE_CALL();
     ALOGW("%s: Not supported in buffer queue mode.", __FUNCTION__);
 }
@@ -1338,7 +1371,7 @@ status_t Camera2Client::cancelAutoFocus() {
     ALOGV("%s: Camera %d", __FUNCTION__, mCameraId);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
-    if (mDevice == 0) return NO_INIT;
+
     int triggerId;
     {
         SharedParameters::Lock l(mParameters);
@@ -1623,7 +1656,7 @@ status_t Camera2Client::commandEnableShutterSoundL(bool enable) {
 }
 
 status_t Camera2Client::commandPlayRecordingSoundL() {
-    mCameraService->playSound(CameraService::SOUND_RECORDING_START);
+    sCameraService->playSound(CameraService::SOUND_RECORDING_START);
     return OK;
 }
 
@@ -1705,6 +1738,8 @@ void Camera2Client::notifyError(int32_t errorCode,
             err = CAMERA_ERROR_RELEASED;
             break;
         case hardware::camera2::ICameraDeviceCallbacks::ERROR_CAMERA_DEVICE:
+            err = CAMERA_ERROR_UNKNOWN;
+            break;
         case hardware::camera2::ICameraDeviceCallbacks::ERROR_CAMERA_SERVICE:
             err = CAMERA_ERROR_SERVER_DIED;
             break;
@@ -1903,12 +1938,12 @@ int Camera2Client::getZslStreamId() const {
 }
 
 status_t Camera2Client::registerFrameListener(int32_t minId, int32_t maxId,
-        wp<camera2::FrameProcessor::FilteredListener> listener, bool sendPartials) {
+        const wp<camera2::FrameProcessor::FilteredListener>& listener, bool sendPartials) {
     return mFrameProcessor->registerListener(minId, maxId, listener, sendPartials);
 }
 
 status_t Camera2Client::removeFrameListener(int32_t minId, int32_t maxId,
-        wp<camera2::FrameProcessor::FilteredListener> listener) {
+        const wp<camera2::FrameProcessor::FilteredListener>& listener) {
     return mFrameProcessor->removeListener(minId, maxId, listener);
 }
 

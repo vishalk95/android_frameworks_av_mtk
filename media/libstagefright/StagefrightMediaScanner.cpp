@@ -28,7 +28,6 @@
 #include <media/mediametadataretriever.h>
 #include <private/media/VideoFrame.h>
 
-#include <stagefright/AVExtensions.h>
 namespace android {
 
 StagefrightMediaScanner::StagefrightMediaScanner() {}
@@ -41,11 +40,8 @@ static bool FileHasAcceptableExtension(const char *extension) {
         ".mpeg", ".ogg", ".mid", ".smf", ".imy", ".wma", ".aac",
         ".wav", ".amr", ".midi", ".xmf", ".rtttl", ".rtx", ".ota",
         ".mkv", ".mka", ".webm", ".ts", ".fl", ".flac", ".mxmf",
-        ".avi", ".mpeg", ".mpg", ".awb", ".mpga", ".mov", ".adts",
-        ".dm", ".m2ts", ".mp3d", ".wmv", ".asf", ".flv", ".ra",
-        ".rm", ".rmvb", ".ac3", ".ape", ".dts", ".mp1", ".mp2",
-        ".f4v", "hlv", "nrg", "m2v", ".swf", ".vc1", ".vob",
-        ".divx", ".qcp", ".ec3", ".opus"
+        ".avi", ".mpeg", ".mpg", ".awb", ".mpga", ".mov", ".opus",
+        ".m4v", ".oga"
     };
     static const size_t kNumValidExtensions =
         sizeof(kValidExtensions) / sizeof(kValidExtensions[0]);
@@ -67,6 +63,11 @@ MediaScanResult StagefrightMediaScanner::processFile(
     client.setLocale(locale());
     client.beginFile();
     MediaScanResult result = processFileInternal(path, mimeType, client);
+    ALOGV("result: %d", result);
+    if (mimeType == NULL && result != MEDIA_SCAN_RESULT_OK) {
+        ALOGW("media scan failed for %s", path);
+        client.setMimeType("application/octet-stream");
+    }
     client.endFile();
     return result;
 }
@@ -80,8 +81,7 @@ MediaScanResult StagefrightMediaScanner::processFileInternal(
         return MEDIA_SCAN_RESULT_SKIPPED;
     }
 
-    if (!FileHasAcceptableExtension(extension)
-        && !AVUtils::get()->isEnhancedExtension(extension)) {
+    if (!FileHasAcceptableExtension(extension)) {
         return MEDIA_SCAN_RESULT_SKIPPED;
     }
 
@@ -91,7 +91,8 @@ MediaScanResult StagefrightMediaScanner::processFileInternal(
     status_t status;
     if (fd < 0) {
         // couldn't open it locally, maybe the media server can?
-        status = mRetriever->setDataSource(NULL /* httpService */, path);
+        sp<IMediaHTTPService> nullService;
+        status = mRetriever->setDataSource(nullService, path);
     } else {
         status = mRetriever->setDataSource(fd, 0, 0x7ffffffffffffffL);
         close(fd);
@@ -124,7 +125,6 @@ MediaScanResult StagefrightMediaScanner::processFileInternal(
         { "genre", METADATA_KEY_GENRE },
         { "title", METADATA_KEY_TITLE },
         { "year", METADATA_KEY_YEAR },
-        { "date", METADATA_KEY_DATE },
         { "duration", METADATA_KEY_DURATION },
         { "writer", METADATA_KEY_WRITER },
         { "compilation", METADATA_KEY_COMPILATION },

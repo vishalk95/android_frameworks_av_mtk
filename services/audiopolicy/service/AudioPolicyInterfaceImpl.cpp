@@ -37,9 +37,6 @@ status_t AudioPolicyService::setDeviceConnectionState(audio_devices_t device,
     if (!settingsAllowed()) {
         return PERMISSION_DENIED;
     }
-    if (!audio_is_output_device(device) && !audio_is_input_device(device)) {
-        return BAD_VALUE;
-    }
     if (state != AUDIO_POLICY_DEVICE_STATE_AVAILABLE &&
             state != AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE) {
         return BAD_VALUE;
@@ -60,6 +57,23 @@ audio_policy_dev_state_t AudioPolicyService::getDeviceConnectionState(
     }
     return mAudioPolicyManager->getDeviceConnectionState(device,
                                                       device_address);
+}
+
+status_t AudioPolicyService::handleDeviceConfigChange(audio_devices_t device,
+                                                  const char *device_address,
+                                                  const char *device_name)
+{
+    if (mAudioPolicyManager == NULL) {
+        return NO_INIT;
+    }
+    if (!settingsAllowed()) {
+        return PERMISSION_DENIED;
+    }
+
+    ALOGV("handleDeviceConfigChange()");
+    Mutex::Autolock _l(mLock);
+    return mAudioPolicyManager->handleDeviceConfigChange(device, device_address,
+                                                         device_name);
 }
 
 status_t AudioPolicyService::setPhoneState(audio_mode_t state)
@@ -151,12 +165,10 @@ status_t AudioPolicyService::getOutputForAttr(const audio_attributes_t *attr,
                                               audio_session_t session,
                                               audio_stream_type_t *stream,
                                               uid_t uid,
-                                              uint32_t samplingRate,
-                                              audio_format_t format,
-                                              audio_channel_mask_t channelMask,
+                                              const audio_config_t *config,
                                               audio_output_flags_t flags,
-                                              audio_port_handle_t selectedDeviceId,
-                                              const audio_offload_info_t *offloadInfo)
+                                              audio_port_handle_t *selectedDeviceId,
+                                              audio_port_handle_t *portId)
 {
     if (mAudioPolicyManager == NULL) {
         return NO_INIT;
@@ -173,15 +185,15 @@ status_t AudioPolicyService::getOutputForAttr(const audio_attributes_t *attr,
                     "%s uid %d tried to pass itself off as %d", __FUNCTION__, callingUid, uid);
             uid = callingUid;
         }
-        status = mAudioPolicyManager->getOutputForAttr(attr, output, session, stream, uid, samplingRate,
-                                 format, channelMask, flags, selectedDeviceId, offloadInfo);
+        status = mAudioPolicyManager->getOutputForAttr(attr, output, session, stream, uid,
+                                                       config, flags, selectedDeviceId, portId);
 
         audioPolicyEffects = mAudioPolicyEffects;
     }
 
     if (status == NO_ERROR && audioPolicyEffects != 0) {
         audioPolicyEffects->updateOutputAudioSessionInfo(*output,
-                *stream, session, flags, channelMask, uid);
+                *stream, session, flags, config, uid);
     }
 
     return status;
@@ -198,20 +210,6 @@ status_t AudioPolicyService::startOutput(audio_io_handle_t output,
         return NO_INIT;
     }
     ALOGV("startOutput()");
-    return mOutputCommandThread->startOutputCommand(output, stream, session);
-}
-
-status_t AudioPolicyService::doStartOutput(audio_io_handle_t output,
-                                           audio_stream_type_t stream,
-                                           audio_session_t session)
-{
-    if (uint32_t(stream) >= AUDIO_STREAM_CNT) {
-        return BAD_VALUE;
-    }
-    if (mAudioPolicyManager == NULL) {
-        return NO_INIT;
-    }
-    ALOGV("doStartOutput()");
     sp<AudioPolicyEffects>audioPolicyEffects;
     {
         Mutex::Autolock _l(mLock);
@@ -297,11 +295,10 @@ status_t AudioPolicyService::getInputForAttr(const audio_attributes_t *attr,
                                              audio_session_t session,
                                              pid_t pid,
                                              uid_t uid,
-                                             uint32_t samplingRate,
-                                             audio_format_t format,
-                                             audio_channel_mask_t channelMask,
+                                             const audio_config_base_t *config,
                                              audio_input_flags_t flags,
-                                             audio_port_handle_t selectedDeviceId)
+                                             audio_port_handle_t *selectedDeviceId,
+                                             audio_port_handle_t *portId)
 {
     if (mAudioPolicyManager == NULL) {
         return NO_INIT;
@@ -311,13 +308,6 @@ status_t AudioPolicyService::getInputForAttr(const audio_attributes_t *attr,
         attr->source != AUDIO_SOURCE_FM_TUNER) {
         return BAD_VALUE;
     }
-
-    if ((attr->source == AUDIO_SOURCE_HOTWORD) && !captureHotwordAllowed()) {
-        return BAD_VALUE;
-    }
-    sp<AudioPolicyEffects>audioPolicyEffects;
-    status_t status;
-    AudioPolicyInterface::input_type_t inputType;
 
     bool updatePid = (pid == -1);
     const uid_t callingUid = IPCThreadState::self()->getCallingUid();
@@ -336,13 +326,21 @@ status_t AudioPolicyService::getInputForAttr(const audio_attributes_t *attr,
         pid = callingPid;
     }
 
+    if ((attr->source == AUDIO_SOURCE_HOTWORD) && !captureHotwordAllowed(pid, uid)) {
+        return BAD_VALUE;
+    }
+
+    sp<AudioPolicyEffects>audioPolicyEffects;
     {
+        status_t status;
+        AudioPolicyInterface::input_type_t inputType;
+
         Mutex::Autolock _l(mLock);
         // the audio_in_acoustics_t parameter is ignored by get_input()
         status = mAudioPolicyManager->getInputForAttr(attr, input, session, uid,
-                                                     samplingRate, format, channelMask,
+                                                     config,
                                                      flags, selectedDeviceId,
-                                                     &inputType);
+                                                     &inputType, portId);
         audioPolicyEffects = mAudioPolicyEffects;
 
         if (status == NO_ERROR) {
@@ -396,8 +394,23 @@ status_t AudioPolicyService::startInput(audio_io_handle_t input,
         return NO_INIT;
     }
     Mutex::Autolock _l(mLock);
+    AudioPolicyInterface::concurrency_type__mask_t concurrency;
+    status_t status = mAudioPolicyManager->startInput(input, session, &concurrency);
 
-    return mAudioPolicyManager->startInput(input, session);
+    if (status == NO_ERROR) {
+        LOG_ALWAYS_FATAL_IF(concurrency & ~AudioPolicyInterface::API_INPUT_CONCURRENCY_ALL,
+                            "startInput(): invalid concurrency type %d", (int)concurrency);
+
+        // enforce permission (if any) required for each type of concurrency
+        if (concurrency & AudioPolicyInterface::API_INPUT_CONCURRENCY_CALL) {
+            //TODO: check incall capture permission
+        }
+        if (concurrency & AudioPolicyInterface::API_INPUT_CONCURRENCY_CAPTURE) {
+            //TODO: check concurrent capture permission
+        }
+    }
+
+    return status;
 }
 
 status_t AudioPolicyService::stopInput(audio_io_handle_t input,
@@ -424,7 +437,7 @@ void AudioPolicyService::releaseInput(audio_io_handle_t input,
     }
     if (audioPolicyEffects != 0) {
         // release audio processors from the input
-        status_t status = audioPolicyEffects->releaseInputEffects(input);
+        status_t status = audioPolicyEffects->releaseInputEffects(input, session);
         if(status != NO_ERROR) {
             ALOGW("Failed to release effects on input %d", input);
         }
@@ -604,7 +617,8 @@ status_t AudioPolicyService::queryDefaultPreProcessing(audio_session_t audioSess
         *count = 0;
         return NO_INIT;
     }
-    return audioPolicyEffects->queryDefaultInputEffects(audioSession, descriptors, count);
+    return audioPolicyEffects->queryDefaultInputEffects(
+            (audio_session_t)audioSession, descriptors, count);
 }
 
 bool AudioPolicyService::isOffloadSupported(const audio_offload_info_t& info)
@@ -718,7 +732,7 @@ status_t AudioPolicyService::releaseSoundTriggerSession(audio_session_t session)
     return mAudioPolicyManager->releaseSoundTriggerSession(session);
 }
 
-status_t AudioPolicyService::registerPolicyMixes(Vector<AudioMix> mixes, bool registration)
+status_t AudioPolicyService::registerPolicyMixes(const Vector<AudioMix>& mixes, bool registration)
 {
     Mutex::Autolock _l(mLock);
     if(!modifyAudioRoutingAllowed()) {
@@ -736,7 +750,7 @@ status_t AudioPolicyService::registerPolicyMixes(Vector<AudioMix> mixes, bool re
 
 status_t AudioPolicyService::startAudioSource(const struct audio_port_config *source,
                                   const audio_attributes_t *attributes,
-                                  audio_io_handle_t *handle)
+                                  audio_patch_handle_t *handle)
 {
     Mutex::Autolock _l(mLock);
     if (mAudioPolicyManager == NULL) {
@@ -747,7 +761,7 @@ status_t AudioPolicyService::startAudioSource(const struct audio_port_config *so
                                                  IPCThreadState::self()->getCallingUid());
 }
 
-status_t AudioPolicyService::stopAudioSource(audio_io_handle_t handle)
+status_t AudioPolicyService::stopAudioSource(audio_patch_handle_t handle)
 {
     Mutex::Autolock _l(mLock);
     if (mAudioPolicyManager == NULL) {
@@ -778,6 +792,16 @@ status_t AudioPolicyService::getMasterMono(bool *mono)
     return mAudioPolicyManager->getMasterMono(mono);
 }
 
+float AudioPolicyService::getStreamVolumeDB(
+            audio_stream_type_t stream, int index, audio_devices_t device)
+{
+    if (mAudioPolicyManager == NULL) {
+        return NAN;
+    }
+    Mutex::Autolock _l(mLock);
+    return mAudioPolicyManager->getStreamVolumeDB(stream, index, device);
+}
+
 status_t AudioPolicyService::listAudioSessions(audio_stream_type_t streams,
                                                Vector< sp<AudioSessionInfo>> &sessions)
 {
@@ -797,6 +821,5 @@ status_t AudioPolicyService::listAudioSessions(audio_stream_type_t streams,
     // no errors here if effects are not available
     return NO_ERROR;
 }
-
 
 }; // namespace android

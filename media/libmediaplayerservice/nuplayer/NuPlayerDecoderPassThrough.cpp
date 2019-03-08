@@ -25,27 +25,28 @@
 #include "NuPlayerSource.h"
 
 #include <media/ICrypto.h>
+#include <media/MediaCodecBuffer.h>
 #include <media/stagefright/foundation/ABuffer.h>
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AMessage.h>
 #include <media/stagefright/MediaErrors.h>
-#include "mediaplayerservice/AVNuExtensions.h"
 
 #include "ATSParser.h"
 
 namespace android {
 
+// TODO optimize buffer size for power consumption
+// The offload read buffer size is 32 KB but 24 KB uses less power.
+static const size_t kAggregateBufferSizeBytes = 24 * 1024;
 static const size_t kMaxCachedBytes = 200000;
+
 NuPlayer::DecoderPassThrough::DecoderPassThrough(
         const sp<AMessage> &notify,
         const sp<Source> &source,
         const sp<Renderer> &renderer)
     : DecoderBase(notify),
-      mAggregateBufferSizeBytes(24 * 1024),
       mSource(source),
       mRenderer(renderer),
-      // TODO optimize buffer size for power consumption
-      // The offload read buffer size is 32 KB but 24 KB uses less power.
       mSkipRenderingUntilMediaTimeUs(-1ll),
       mReachedEOS(true),
       mPendingAudioErr(OK),
@@ -90,11 +91,6 @@ void NuPlayer::DecoderPassThrough::onSetRenderer(
     // renderer can't be changed during offloading
     ALOGW_IF(renderer != mRenderer,
             "ignoring request to change renderer");
-}
-
-void NuPlayer::DecoderPassThrough::onGetInputBuffers(
-        Vector<sp<ABuffer> > * /* dstBuffers */) {
-    ALOGE("onGetInputBuffers() called unexpectedly");
 }
 
 bool NuPlayer::DecoderPassThrough::isStaleReply(const sp<AMessage> &msg) {
@@ -172,9 +168,9 @@ sp<ABuffer> NuPlayer::DecoderPassThrough::aggregateBuffer(
     size_t smallSize = accessUnit->size();
     if ((mAggregateBuffer == NULL)
             // Don't bother if only room for a few small buffers.
-            && (smallSize < (mAggregateBufferSizeBytes / 3))) {
+            && (smallSize < (kAggregateBufferSizeBytes / 3))) {
         // Create a larger buffer for combining smaller buffers from the extractor.
-        mAggregateBuffer = new ABuffer(mAggregateBufferSizeBytes);
+        mAggregateBuffer = new ABuffer(kAggregateBufferSizeBytes);
         mAggregateBuffer->setRange(0, 0); // start empty
     }
 
@@ -298,6 +294,9 @@ void NuPlayer::DecoderPassThrough::onInputBufferFetched(
             return;
         }
 
+        if (streamErr != ERROR_END_OF_STREAM) {
+            handleError(streamErr);
+        }
         mReachedEOS = true;
         if (mRenderer != NULL) {
             mRenderer->queueEOS(true /* audio */, ERROR_END_OF_STREAM);
@@ -319,10 +318,9 @@ void NuPlayer::DecoderPassThrough::onInputBufferFetched(
     int32_t bufferSize = buffer->size();
     mCachedBytes += bufferSize;
 
+    int64_t timeUs = 0;
+    CHECK(buffer->meta()->findInt64("timeUs", &timeUs));
     if (mSkipRenderingUntilMediaTimeUs >= 0) {
-        int64_t timeUs = 0;
-        CHECK(buffer->meta()->findInt64("timeUs", &timeUs));
-
         if (timeUs < mSkipRenderingUntilMediaTimeUs) {
             ALOGV("[%s] dropping buffer at time %lld as requested.",
                      mComponentName.c_str(), (long long)timeUs);
@@ -343,7 +341,10 @@ void NuPlayer::DecoderPassThrough::onInputBufferFetched(
     reply->setInt32("generation", mBufferGeneration);
     reply->setInt32("size", bufferSize);
 
-    mRenderer->queueBuffer(true /* audio */, buffer, reply);
+    sp<MediaCodecBuffer> mcBuffer = new MediaCodecBuffer(nullptr, buffer);
+    mcBuffer->meta()->setInt64("timeUs", timeUs);
+
+    mRenderer->queueBuffer(true /* audio */, mcBuffer, reply);
 
     ++mPendingBuffersToDrain;
     ALOGV("onInputBufferFilled: #ToDrain = %zu, cachedBytes = %zu",

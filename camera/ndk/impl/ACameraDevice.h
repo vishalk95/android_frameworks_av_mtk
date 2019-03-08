@@ -36,7 +36,7 @@
 #include <camera/camera2/OutputConfiguration.h>
 #include <camera/camera2/CaptureRequest.h>
 
-#include <NdkCameraDevice.h>
+#include <camera/NdkCameraDevice.h>
 #include "ACameraMetadata.h"
 
 namespace android {
@@ -65,7 +65,7 @@ class CameraDevice final : public RefBase {
     // Callbacks from camera service
     class ServiceCallback : public hardware::camera2::BnCameraDeviceCallbacks {
       public:
-        ServiceCallback(CameraDevice* device) : mDevice(device) {}
+        explicit ServiceCallback(CameraDevice* device) : mDevice(device) {}
         binder::Status onDeviceError(int32_t errorCode,
                            const CaptureResultExtras& resultExtras) override;
         binder::Status onDeviceIdle() override;
@@ -74,7 +74,9 @@ class CameraDevice final : public RefBase {
         binder::Status onResultReceived(const CameraMetadata& metadata,
                               const CaptureResultExtras& resultExtras) override;
         binder::Status onPrepared(int streamId) override;
-        binder::Status onRepeatingRequestError(int64_t lastFrameNumber) override;
+        binder::Status onRequestQueueEmpty() override;
+        binder::Status onRepeatingRequestError(int64_t lastFrameNumber,
+                int32_t stoppedSequenceId) override;
       private:
         const wp<CameraDevice> mDevice;
     };

@@ -25,9 +25,27 @@
 
 #include "Session.h"
 
+namespace {
+const android::String8 kStreaming("Streaming");
+const android::String8 kOffline("Offline");
+const android::String8 kTrue("True");
+
+const android::String8 kQueryKeyLicenseType("LicenseType");
+    // Value: "Streaming" or "Offline"
+const android::String8 kQueryKeyPlayAllowed("PlayAllowed");
+    // Value: "True" or "False"
+const android::String8 kQueryKeyRenewAllowed("RenewAllowed");
+    // Value: "True" or "False"
+};
+
 namespace clearkeydrm {
 
 using android::sp;
+
+DrmPlugin::DrmPlugin(SessionLibrary* sessionLibrary)
+        : mSessionLibrary(sessionLibrary) {
+    mPlayPolicy.clear();
+}
 
 status_t DrmPlugin::openSession(Vector<uint8_t>& sessionId) {
     sp<Session> session = mSessionLibrary->createSession();
@@ -37,10 +55,14 @@ status_t DrmPlugin::openSession(Vector<uint8_t>& sessionId) {
 
 status_t DrmPlugin::closeSession(const Vector<uint8_t>& sessionId) {
     sp<Session> session = mSessionLibrary->findSession(sessionId);
+    if (sessionId.size() == 0) {
+        return android::BAD_VALUE;
+    }
     if (session.get()) {
         mSessionLibrary->destroySession(session);
+        return android::OK;
     }
-    return android::OK;
+    return android::ERROR_DRM_SESSION_NOT_OPENED;
 }
 
 status_t DrmPlugin::getKeyRequest(
@@ -53,26 +75,44 @@ status_t DrmPlugin::getKeyRequest(
         String8& defaultUrl,
         DrmPlugin::KeyRequestType *keyRequestType) {
     UNUSED(optionalParameters);
+    if (scope.size() == 0) {
+        return android::BAD_VALUE;
+    }
+
     if (keyType != kKeyType_Streaming) {
         return android::ERROR_DRM_CANNOT_HANDLE;
     }
+
     *keyRequestType = DrmPlugin::kKeyRequestType_Initial;
     defaultUrl.clear();
     sp<Session> session = mSessionLibrary->findSession(scope);
     if (!session.get()) {
         return android::ERROR_DRM_SESSION_NOT_OPENED;
     }
+
     return session->getKeyRequest(initData, mimeType, &request);
+}
+
+void DrmPlugin::setPlayPolicy() {
+    mPlayPolicy.clear();
+    mPlayPolicy.add(kQueryKeyLicenseType, kStreaming);
+    mPlayPolicy.add(kQueryKeyPlayAllowed, kTrue);
+    mPlayPolicy.add(kQueryKeyRenewAllowed, kTrue);
 }
 
 status_t DrmPlugin::provideKeyResponse(
         const Vector<uint8_t>& scope,
         const Vector<uint8_t>& response,
         Vector<uint8_t>& keySetId) {
+    if (scope.size() == 0 || response.size() == 0) {
+        return android::BAD_VALUE;
+    }
     sp<Session> session = mSessionLibrary->findSession(scope);
     if (!session.get()) {
         return android::ERROR_DRM_SESSION_NOT_OPENED;
     }
+
+    setPlayPolicy();
     status_t res = session->provideKeyResponse(response);
     if (res == android::OK) {
         // This is for testing AMediaDrm_setOnEventListener only.
@@ -101,4 +141,18 @@ status_t DrmPlugin::getPropertyString(
     return android::OK;
 }
 
+status_t DrmPlugin::queryKeyStatus(
+        const Vector<uint8_t>& sessionId,
+        KeyedVector<String8, String8>& infoMap) const {
+
+    if (sessionId.size() == 0) {
+        return android::BAD_VALUE;
+    }
+
+    infoMap.clear();
+    for (size_t i = 0; i < mPlayPolicy.size(); ++i) {
+        infoMap.add(mPlayPolicy.keyAt(i), mPlayPolicy.valueAt(i));
+    }
+    return android::OK;
+}
 }  // namespace clearkeydrm

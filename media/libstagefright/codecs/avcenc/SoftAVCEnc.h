@@ -21,7 +21,7 @@
 #include <media/stagefright/foundation/ABase.h>
 #include <utils/Vector.h>
 
-#include "SoftVideoEncoderOMXComponent.h"
+#include <media/stagefright/omx/SoftVideoEncoderOMXComponent.h>
 
 namespace android {
 
@@ -111,8 +111,8 @@ namespace android {
 
 /** Compute difference between start and end */
 #define TIME_DIFF(start, end, diff) \
-    diff = ((end.tv_sec - start.tv_sec) * 1000000) + \
-            (end.tv_usec - start.tv_usec);
+    diff = (((end).tv_sec - (start).tv_sec) * 1000000) + \
+            ((end).tv_usec - (start).tv_usec);
 
 #define ive_aligned_malloc(alignment, size) memalign(alignment, size)
 #define ive_aligned_free(buf) free(buf)

@@ -18,15 +18,14 @@
 
 #define MY_HANDLER_H_
 
-#ifndef LOG_NDEBUG
 //#define LOG_NDEBUG 0
-#endif
 
 #ifndef LOG_TAG
 #define LOG_TAG "MyHandler"
 #endif
 
 #include <utils/Log.h>
+#include <cutils/properties.h> // for property_get
 
 #include "APacketSource.h"
 #include "ARTPConnection.h"
@@ -42,7 +41,6 @@
 #include <media/stagefright/foundation/AMessage.h>
 #include <media/stagefright/MediaErrors.h>
 #include <media/stagefright/Utils.h>
-#include <mediaplayerservice/AVMediaServiceExtensions.h>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -71,7 +69,6 @@ static int64_t kPauseDelayUs = 3000000ll;
 // The allowed maximum number of stale access units at the beginning of
 // a new sequence.
 static int32_t kMaxAllowedStaleAccessUnits = 20;
-static int64_t kTearDownTimeoutUs = 3000000ll;
 
 namespace android {
 
@@ -114,7 +111,6 @@ struct MyHandler : public AHandler {
         kWhatEOS                        = 'eos!',
         kWhatSeekDiscontinuity          = 'seeD',
         kWhatNormalPlayTimeMapping      = 'nptM',
-        kWhatByeReceived                = 'byeR',
     };
 
     MyHandler(
@@ -125,6 +121,8 @@ struct MyHandler : public AHandler {
           mUIDValid(uidValid),
           mUID(uid),
           mNetLooper(new ALooper),
+          mConn(new ARTSPConnection(mUIDValid, mUID)),
+          mRTPConn(new ARTPConnection),
           mOriginalSessionURL(url),
           mSessionURL(url),
           mSetupTracksSuccessful(false),
@@ -138,7 +136,7 @@ struct MyHandler : public AHandler {
           mCheckPending(false),
           mCheckGeneration(0),
           mCheckTimeoutGeneration(0),
-          mTryTCPInterleaving(false),
+          mTryTCPInterleaving(property_get_bool("rtp.transport.TCP", false)),
           mTryFakeRTCP(false),
           mReceivedFirstRTCPPacket(false),
           mReceivedFirstRTPPacket(false),
@@ -148,21 +146,10 @@ struct MyHandler : public AHandler {
           mPausing(false),
           mPauseGeneration(0),
           mPlayResponseParsed(false) {
-        mConn = AVMediaServiceFactory::get()->createARTSPConnection(
-                mUIDValid, uid);
-        mRTPConn = AVMediaServiceFactory::get()->createARTPConnection();
         mNetLooper->setName("rtsp net");
         mNetLooper->start(false /* runOnCallingThread */,
                           false /* canCallJava */,
                           PRIORITY_HIGHEST);
-
-        char value[PROPERTY_VALUE_MAX] = {0};
-        property_get("rtsp.transport.TCP", value, "false");
-        if (!strcasecmp(value, "true")) {
-            mTryTCPInterleaving = true;
-        } else {
-            mTryTCPInterleaving = false;
-        }
 
         // Strip any authentication info from the session url, we don't
         // want to transmit user/pass in cleartext.
@@ -722,7 +709,6 @@ struct MyHandler : public AHandler {
                                      timeoutSecs);
                             }
                         }
-                        AVMediaServiceUtils::get()->setServerTimeoutUs(mKeepAliveTimeoutUs);
 
                         i = mSessionID.find(";");
                         if (i >= 0) {
@@ -742,19 +728,16 @@ struct MyHandler : public AHandler {
 
                                 // We are going to continue even if we were
                                 // unable to poke a hole into the firewall...
-                                AVMediaServiceUtils::get()->pokeAHole(
-                                        this,
+                                pokeAHole(
                                         track->mRTPSocket,
                                         track->mRTCPSocket,
-                                        transport,
-                                        mSessionHost);
+                                        transport);
                             }
 
                             mRTPConn->addStream(
                                     track->mRTPSocket, track->mRTCPSocket,
                                     mSessionDesc, index,
-                                    notify, track->mUsingInterleavedTCP,
-                                    mConn->isIPV6());
+                                    notify, track->mUsingInterleavedTCP);
 
                             mSetupTracksSuccessful = true;
                         } else {
@@ -797,7 +780,6 @@ struct MyHandler : public AHandler {
                     request.append(mSessionID);
                     request.append("\r\n");
 
-                    AVMediaServiceUtils::get()->appendRange(&request);
                     request.append("\r\n");
 
                     sp<AMessage> reply = new AMessage('play', this);
@@ -827,11 +809,7 @@ struct MyHandler : public AHandler {
                         result = UNKNOWN_ERROR;
                     } else {
                         parsePlayResponse(response);
-
-                        sp<AMessage> timeout = new AMessage('tiou', this);
-                        mCheckTimeoutGeneration++;
-                        timeout->setInt32("tioucheck", mCheckTimeoutGeneration);
-                        timeout->post(kStartupTimeoutUs);
+                        postTimeout();
                     }
                 }
 
@@ -946,15 +924,6 @@ struct MyHandler : public AHandler {
                 request.append("\r\n");
 
                 mConn->sendRequest(request.c_str(), reply);
-
-                // If the response of teardown hasn't been received in 3 seconds,
-                // post 'tear' message to avoid ANR.
-                if (!msg->findInt32("reconnect", &reconnect) || !reconnect) {
-                    sp<AMessage> teardown = new AMessage('tear', this);
-                    teardown->setInt32("result", -ECONNABORTED);
-                    teardown->post(kTearDownTimeoutUs);
-                }
-
                 break;
             }
 
@@ -1058,13 +1027,6 @@ struct MyHandler : public AHandler {
                 int32_t eos;
                 if (msg->findInt32("eos", &eos)) {
                     ALOGI("received BYE on track index %zu", trackIndex);
-                    char value[PROPERTY_VALUE_MAX] = {0};
-                    if (property_get("rtcp.bye.notify", value, "false")
-                            && !strcasecmp(value, "true")) {
-                        sp<AMessage> msg = mNotify->dup();
-                        msg->setInt32("what", kWhatByeReceived);
-                        msg->post();
-                    }
                     if (!mAllTracksHaveTime && dataReceivedOnAllChannels()) {
                         ALOGI("No time established => fake existing data");
 
@@ -1189,10 +1151,7 @@ struct MyHandler : public AHandler {
 
                         // Post new timeout in order to make sure to use
                         // fake timestamps if no new Sender Reports arrive
-                        sp<AMessage> timeout = new AMessage('tiou', this);
-                        mCheckTimeoutGeneration++;
-                        timeout->setInt32("tioucheck", mCheckTimeoutGeneration);
-                        timeout->post(kStartupTimeoutUs);
+                        postTimeout();
                     }
                 }
 
@@ -1284,10 +1243,7 @@ struct MyHandler : public AHandler {
 
                 // Start new timeoutgeneration to avoid getting timeout
                 // before PLAY response arrive
-                sp<AMessage> timeout = new AMessage('tiou', this);
-                mCheckTimeoutGeneration++;
-                timeout->setInt32("tioucheck", mCheckTimeoutGeneration);
-                timeout->post(kStartupTimeoutUs);
+                postTimeout();
 
                 int64_t timeUs;
                 CHECK(msg->findInt64("time", &timeUs));
@@ -1341,10 +1297,7 @@ struct MyHandler : public AHandler {
 
                         // Post new timeout in order to make sure to use
                         // fake timestamps if no new Sender Reports arrive
-                        sp<AMessage> timeout = new AMessage('tiou', this);
-                        mCheckTimeoutGeneration++;
-                        timeout->setInt32("tioucheck", mCheckTimeoutGeneration);
-                        timeout->post(kStartupTimeoutUs);
+                        postTimeout();
 
                         ssize_t i = response->mHeaders.indexOfKey("rtp-info");
                         CHECK_GE(i, 0);
@@ -1522,9 +1475,7 @@ struct MyHandler : public AHandler {
 
             size_t trackIndex = 0;
             while (trackIndex < mTracks.size()
-                    && !(AVMediaServiceUtils::get()->parseTrackURL(
-                    mTracks.editItemAt(trackIndex).mURL, val)
-                    || val == mTracks.editItemAt(trackIndex).mURL)) {
+                    && !(val == mTracks.editItemAt(trackIndex).mURL)) {
                 ++trackIndex;
             }
             CHECK_LT(trackIndex, mTracks.size());
@@ -1704,9 +1655,8 @@ private:
             request.append(interleaveIndex + 1);
         } else {
             unsigned rtpPort;
-            AVMediaServiceUtils::get()->makePortPair(
-                    &info->mRTPSocket, &info->mRTCPSocket, &rtpPort,
-                    mConn->isIPV6());
+            ARTPConnection::MakePortPair(
+                    &info->mRTPSocket, &info->mRTCPSocket, &rtpPort);
 
             if (mUIDValid) {
                 HTTPBase::RegisterSocketUserTag(info->mRTPSocket, mUID,
@@ -1956,7 +1906,7 @@ private:
             mLastMediaTimeUs = mediaTimeUs;
         }
 
-        if (mediaTimeUs < 0 && !mSeekable) {
+        if (mediaTimeUs < 0) {
             ALOGV("dropping early accessUnit.");
             return false;
         }
@@ -2001,6 +1951,16 @@ private:
         msg->setInt32("rtpTime", rtpTime);
         msg->setInt64("nptUs", nptUs);
         msg->post();
+    }
+
+    void postTimeout() {
+        sp<AMessage> timeout = new AMessage('tiou', this);
+        mCheckTimeoutGeneration++;
+        timeout->setInt32("tioucheck", mCheckTimeoutGeneration);
+
+        int64_t startupTimeoutUs;
+        startupTimeoutUs = property_get_int64("media.rtsp.timeout-us", kStartupTimeoutUs);
+        timeout->post(startupTimeoutUs);
     }
 
     DISALLOW_EVIL_CONSTRUCTORS(MyHandler);

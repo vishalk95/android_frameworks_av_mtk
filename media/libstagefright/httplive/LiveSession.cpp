@@ -49,12 +49,7 @@ const int64_t LiveSession::kDownSwitchMarkUs = 20000000ll;
 const int64_t LiveSession::kUpSwitchMarginUs = 5000000ll;
 const int64_t LiveSession::kResumeThresholdUs = 100000ll;
 
-// Buffer Prepare/Ready/Underflow Marks
-const int64_t LiveSession::kReadyMarkUs = 5000000ll;
-const int64_t LiveSession::kPrepareMarkUs = 1500000ll;
-const int64_t LiveSession::kUnderflowMarkUs = 1000000ll;
-
-struct LiveSession::BandwidthEstimator : public LiveSession::BandwidthBaseEstimator {
+struct LiveSession::BandwidthEstimator : public RefBase {
     BandwidthEstimator();
 
     void addBandwidthMeasurement(size_t numBytes, int64_t delayUs);
@@ -178,7 +173,7 @@ bool LiveSession::BandwidthEstimator::estimateBandwidth(
         *shortTermBps = mShortTermEstimate;
     }
 
-    int32_t minEstimate = -1, maxEstimate = -1;
+    int64_t minEstimate = -1, maxEstimate = -1;
     List<int32_t>::iterator it;
     for (it = mPrevEstimates.begin(); it != mPrevEstimates.end(); it++) {
         int32_t estimate = *it;
@@ -495,6 +490,13 @@ sp<HTTPDownloader> LiveSession::getHTTPDownloader() {
     return new HTTPDownloader(mHTTPService, mExtraHeaders);
 }
 
+void LiveSession::setBufferingSettings(
+        const BufferingSettings &buffering) {
+    sp<AMessage> msg = new AMessage(kWhatSetBufferingSettings, this);
+    writeToAMessage(msg, buffering);
+    msg->post();
+}
+
 void LiveSession::connectAsync(
         const char *url, const KeyedVector<String8, String8> *headers) {
     sp<AMessage> msg = new AMessage(kWhatConnect, this);
@@ -518,9 +520,10 @@ status_t LiveSession::disconnect() {
     return err;
 }
 
-status_t LiveSession::seekTo(int64_t timeUs) {
+status_t LiveSession::seekTo(int64_t timeUs, MediaPlayerSeekMode mode) {
     sp<AMessage> msg = new AMessage(kWhatSeek, this);
     msg->setInt64("timeUs", timeUs);
+    msg->setInt32("mode", mode);
 
     sp<AMessage> response;
     status_t err = msg->postAndAwaitResponse(&response);
@@ -619,6 +622,12 @@ bool LiveSession::checkSwitchProgress(
 
 void LiveSession::onMessageReceived(const sp<AMessage> &msg) {
     switch (msg->what()) {
+        case kWhatSetBufferingSettings:
+        {
+            readFromAMessage(msg, &mBufferingSettings);
+            break;
+        }
+
         case kWhatConnect:
         {
             onConnect(msg);
@@ -690,7 +699,7 @@ void LiveSession::onMessageReceived(const sp<AMessage> &msg) {
                     }
 
                     if (mContinuation != NULL) {
-                        CHECK_GT(mContinuationCounter, 0);
+                        CHECK_GT(mContinuationCounter, 0u);
                         if (--mContinuationCounter == 0) {
                             mContinuation->post();
                         }
@@ -829,7 +838,10 @@ void LiveSession::onMessageReceived(const sp<AMessage> &msg) {
                     // If switching up, require a cushion bigger than kUnderflowMark
                     // to avoid buffering immediately after the switch.
                     // (If we don't have that cushion we'd rather cancel and try again.)
-                    int64_t delayUs = switchUp ? (kUnderflowMarkUs + 1000000ll) : 0;
+                    int64_t delayUs =
+                        switchUp ?
+                            (mBufferingSettings.mRebufferingWatermarkLowMs * 1000ll + 1000000ll)
+                            : 0;
                     bool needResumeUntil = false;
                     sp<AMessage> stopParams = msg;
                     if (checkSwitchProgress(stopParams, delayUs, &needResumeUntil)) {
@@ -1064,7 +1076,6 @@ void LiveSession::onMasterPlaylistFetched(const sp<AMessage> &msg) {
                 itemsWithVideo.push(item);
             }
         }
-#if 0
         // remove the audio-only variants if we have at least one with video
         if (!itemsWithVideo.empty()
                 && itemsWithVideo.size() < mBandwidthItems.size()) {
@@ -1073,7 +1084,7 @@ void LiveSession::onMasterPlaylistFetched(const sp<AMessage> &msg) {
                 mBandwidthItems.push(itemsWithVideo[i]);
             }
         }
-#endif
+
         CHECK_GT(mBandwidthItems.size(), 0u);
         initialBandwidth = mBandwidthItems[0].mBandwidth;
 
@@ -1176,7 +1187,7 @@ static double uniformRand() {
 #endif
 
 bool LiveSession::UriIsSameAsIndex(const AString &uri, int32_t i, bool newUri) {
-    ALOGI("[timed_id3] i %d UriIsSameAsIndex newUri %s, %s", i,
+    ALOGV("[timed_id3] i %d UriIsSameAsIndex newUri %s, %s", i,
             newUri ? "true" : "false",
             newUri ? mStreams[i].mNewUri.c_str() : mStreams[i].mUri.c_str());
     return i >= 0
@@ -1442,8 +1453,11 @@ HLSTime LiveSession::latestMediaSegmentStartTime() const {
 
 void LiveSession::onSeek(const sp<AMessage> &msg) {
     int64_t timeUs;
+    int32_t mode;
     CHECK(msg->findInt64("timeUs", &timeUs));
-    changeConfiguration(timeUs);
+    CHECK(msg->findInt32("mode", &mode));
+    // TODO: add "mode" to changeConfiguration.
+    changeConfiguration(timeUs/* , (MediaPlayerSeekMode)mode */);
 }
 
 status_t LiveSession::getDuration(int64_t *durationUs) const {
@@ -1536,7 +1550,7 @@ void LiveSession::changeConfiguration(
                     mOrigBandwidthIndex, mCurBandwidthIndex);
         }
     }
-    CHECK_LT(mCurBandwidthIndex, mBandwidthItems.size());
+    CHECK_LT((size_t)mCurBandwidthIndex, mBandwidthItems.size());
     const BandwidthItem &item = mBandwidthItems.itemAt(mCurBandwidthIndex);
 
     uint32_t streamMask = 0; // streams that should be fetched by the new fetcher
@@ -2186,13 +2200,16 @@ bool LiveSession::checkBuffering(
         }
 
         ++activeCount;
-        int64_t readyMark = mInPreparationPhase ? kPrepareMarkUs : kReadyMarkUs;
-        if (bufferedDurationUs > readyMark
+        int64_t readyMarkUs =
+            (mInPreparationPhase ?
+                mBufferingSettings.mInitialWatermarkMs :
+                mBufferingSettings.mRebufferingWatermarkHighMs) * 1000ll;
+        if (bufferedDurationUs > readyMarkUs
                 || mPacketSources[i]->isFinished(0)) {
             ++readyCount;
         }
         if (!mPacketSources[i]->isFinished(0)) {
-            if (bufferedDurationUs < kUnderflowMarkUs) {
+            if (bufferedDurationUs < mBufferingSettings.mRebufferingWatermarkLowMs * 1000ll) {
                 ++underflowCount;
             }
             if (bufferedDurationUs > mUpSwitchMark) {

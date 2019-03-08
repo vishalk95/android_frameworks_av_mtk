@@ -59,7 +59,7 @@ CaptureSequencer::~CaptureSequencer() {
     ALOGV("%s: Exit", __FUNCTION__);
 }
 
-void CaptureSequencer::setZslProcessor(wp<ZslProcessor> processor) {
+void CaptureSequencer::setZslProcessor(const wp<ZslProcessor>& processor) {
     Mutex::Autolock l(mInputMutex);
     mZslProcessor = processor;
 }
@@ -132,7 +132,7 @@ void CaptureSequencer::onResultAvailable(const CaptureResult &result) {
 }
 
 void CaptureSequencer::onCaptureAvailable(nsecs_t timestamp,
-        sp<MemoryBase> captureBuffer, bool captureError) {
+        const sp<MemoryBase>& captureBuffer, bool captureError) {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
     Mutex::Autolock l(mInputMutex);
@@ -553,6 +553,12 @@ CaptureSequencer::CaptureState CaptureSequencer::manageStandardCapture(
         return DONE;
     }
 
+    if (l.mParameters.isDeviceZslSupported) {
+        // If device ZSL is supported, drop all pending preview buffers to reduce the chance of
+        // rendering preview frames newer than the still frame.
+        client->getCameraDevice()->dropStreamBuffers(true, client->getPreviewStreamId());
+    }
+
     /**
      * Clear the streaming request for still-capture pictures
      *   (as opposed to i.e. video snapshots)
@@ -709,7 +715,7 @@ status_t CaptureSequencer::updateCaptureRequest(const Parameters &params,
 }
 
 /*static*/ void CaptureSequencer::shutterNotifyLocked(const Parameters &params,
-            sp<Camera2Client> client, int msgType) {
+            const sp<Camera2Client>& client, int msgType) {
     ATRACE_CALL();
 
     if (params.state == Parameters::STILL_CAPTURE

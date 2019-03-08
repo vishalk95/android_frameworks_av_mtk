@@ -45,7 +45,7 @@ using namespace android;
 
 struct MyStreamSource : public BnStreamSource {
     // Object assumes ownership of fd.
-    MyStreamSource(int fd);
+    explicit MyStreamSource(int fd);
 
     virtual void setListener(const sp<IStreamListener> &listener);
     virtual void setBuffers(const Vector<sp<IMemory> > &buffers);
@@ -125,7 +125,7 @@ void MyStreamSource::onBufferAvailable(size_t index) {
 ////////////////////////////////////////////////////////////////////////////////
 
 struct MyConvertingStreamSource : public BnStreamSource {
-    MyConvertingStreamSource(const char *filename);
+    explicit MyConvertingStreamSource(const char *filename);
 
     virtual void setListener(const sp<IStreamListener> &listener);
     virtual void setBuffers(const Vector<sp<IMemory> > &buffers);
@@ -307,8 +307,6 @@ private:
 int main(int argc, char **argv) {
     android::ProcessState::self()->startThreadPool();
 
-    DataSource::RegisterDefaultSniffers();
-
     if (argc != 2) {
         fprintf(stderr, "Usage: %s filename\n", argv[0]);
         return 1;
@@ -355,9 +353,7 @@ int main(int argc, char **argv) {
 
     sp<IStreamSource> source;
 
-    char prop[PROPERTY_VALUE_MAX];
-    bool usemp4 = property_get("media.stagefright.use-mp4source", prop, NULL) &&
-            (!strcmp(prop, "1") || !strcasecmp(prop, "true"));
+    bool usemp4 = property_get_bool("media.stagefright.use-mp4source", false);
 
     size_t len = strlen(argv[1]);
     if ((!usemp4 && len >= 3 && !strcasecmp(".ts", &argv[1][len - 3])) ||

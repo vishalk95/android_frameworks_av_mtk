@@ -16,17 +16,19 @@
 
 #define LOG_TAG "EffectVisualizer"
 //#define LOG_NDEBUG 0
-#include <log/log.h>
+
 #include <assert.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <new>
 #include <time.h>
-#include <math.h>
-#include <audio_effects/effect_visualizer.h>
-#include <cutils/log.h>
 
+#include <new>
+
+#include <log/log.h>
+
+#include <audio_effects/effect_visualizer.h>
 
 extern "C" {
 
@@ -235,7 +237,6 @@ int VisualizerLib_Create(const effect_uuid_t *uuid,
                          int32_t /*ioId*/,
                          effect_handle_t *pHandle) {
     int ret;
-    int i;
 
     if (pHandle == NULL || uuid == NULL) {
         return -EINVAL;
@@ -417,7 +418,6 @@ int Visualizer_command(effect_handle_t self, uint32_t cmdCode, uint32_t cmdSize,
         void *pCmdData, uint32_t *replySize, void *pReplyData) {
 
     VisualizerContext * pContext = (VisualizerContext *)self;
-    int retsize;
 
     if (pContext == NULL || pContext->mState == VISUALIZER_STATE_UNINITIALIZED) {
         return -EINVAL;

@@ -23,8 +23,12 @@
 #include "MtpEventPacket.h"
 #include "mtp.h"
 #include "MtpUtils.h"
+#include "IMtpHandle.h"
 
 #include <utils/threads.h>
+#include <queue>
+#include <memory>
+#include <mutex>
 
 namespace android {
 
@@ -34,9 +38,6 @@ class MtpStorage;
 class MtpServer {
 
 private:
-    // file descriptor for MTP kernel driver
-    int                 mFD;
-
     MtpDatabase*        mDatabase;
 
     // appear as a PTP device
@@ -48,6 +49,15 @@ private:
     int                 mFilePermission;
     int                 mDirectoryPermission;
 
+    // Manufacturer to report in DeviceInfo
+    MtpString           mDeviceInfoManufacturer;
+    // Model to report in DeviceInfo
+    MtpString           mDeviceInfoModel;
+    // Device version to report in DeviceInfo
+    MtpString           mDeviceInfoDeviceVersion;
+    // Serial number to report in DeviceInfo
+    MtpString           mDeviceInfoSerialNumber;
+
     // current session ID
     MtpSessionID        mSessionID;
     // true if we have an open session and mSessionID is valid
@@ -56,15 +66,19 @@ private:
     MtpRequestPacket    mRequest;
     MtpDataPacket       mData;
     MtpResponsePacket   mResponse;
+
     MtpEventPacket      mEvent;
 
     MtpStorageList      mStorages;
+
+    static IMtpHandle*  sHandle;
 
     // handle for new object, set by SendObjectInfo and used by SendObject
     MtpObjectHandle     mSendObjectHandle;
     MtpObjectFormat     mSendObjectFormat;
     MtpString           mSendObjectFilePath;
     size_t              mSendObjectFileSize;
+    time_t              mSendObjectModifiedTime;
 
     Mutex               mMutex;
 
@@ -90,26 +104,28 @@ private:
     Vector<ObjectEdit*>  mObjectEditList;
 
 public:
-                        MtpServer(int fd, MtpDatabase* database, bool ptp,
-                                    int fileGroup, int filePerm, int directoryPerm);
+                        MtpServer(MtpDatabase* database, bool ptp,
+                                    int fileGroup, int filePerm, int directoryPerm,
+                                    const MtpString& deviceInfoManufacturer,
+                                    const MtpString& deviceInfoModel,
+                                    const MtpString& deviceInfoDeviceVersion,
+                                    const MtpString& deviceInfoSerialNumber);
     virtual             ~MtpServer();
 
     MtpStorage*         getStorage(MtpStorageID id);
+    inline bool         hasStorage() { return mStorages.size() > 0; }
+    bool                hasStorage(MtpStorageID id);
     void                addStorage(MtpStorage* storage);
     void                removeStorage(MtpStorage* storage);
 
+    static int          configure(bool usePtp);
     void                run();
 
     void                sendObjectAdded(MtpObjectHandle handle);
     void                sendObjectRemoved(MtpObjectHandle handle);
     void                sendDevicePropertyChanged(MtpDeviceProperty property);
-    void                sendObjectUpdated(MtpObjectHandle handle);
 
 private:
-    MtpStorage*         getStorageLocked(MtpStorageID id);
-    inline bool         hasStorage() { return mStorages.size() > 0; }
-    bool                hasStorage(MtpStorageID id);
-
     void                sendStoreAdded(MtpStorageID id);
     void                sendStoreRemoved(MtpStorageID id);
     void                sendEvent(MtpEventCode code, uint32_t param1);

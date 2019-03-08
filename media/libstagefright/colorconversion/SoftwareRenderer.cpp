@@ -23,15 +23,13 @@
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AMessage.h>
 #include <system/window.h>
+#include <ui/Fence.h>
 #include <ui/GraphicBufferMapper.h>
-#include <gui/IGraphicBufferProducer.h>
+#include <ui/GraphicBuffer.h>
+#include <ui/Rect.h>
 
 namespace android {
 
-static bool runningInEmulator() {
-    char prop[PROPERTY_VALUE_MAX];
-    return (property_get("ro.kernel.qemu", prop, NULL) > 0);
-}
 
 static int ALIGN(int x, int y) {
     // y must be a power of 2.
@@ -106,7 +104,7 @@ void SoftwareRenderer::resetFormatIfChanged(const sp<AMessage> &format) {
     size_t bufHeight = mCropHeight;
 
     // hardware has YUV12 and RGBA8888 support, so convert known formats
-    if (!runningInEmulator()) {
+    {
         switch (mColorFormat) {
             case OMX_COLOR_FormatYUV420Planar:
             case OMX_COLOR_FormatYUV420SemiPlanar:
@@ -150,20 +148,11 @@ void SoftwareRenderer::resetFormatIfChanged(const sp<AMessage> &format) {
     CHECK(mCropHeight > 0);
     CHECK(mConverter == NULL || mConverter->isValid());
 
-#ifdef EXYNOS4_ENHANCEMENTS
-    CHECK_EQ(0,
-            native_window_set_usage(
-            mNativeWindow.get(),
-            GRALLOC_USAGE_SW_READ_NEVER | GRALLOC_USAGE_SW_WRITE_OFTEN
-            | GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_EXTERNAL_DISP
-            | GRALLOC_USAGE_HW_FIMC1));
-#else
     CHECK_EQ(0,
             native_window_set_usage(
             mNativeWindow.get(),
             GRALLOC_USAGE_SW_READ_NEVER | GRALLOC_USAGE_SW_WRITE_OFTEN
             | GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_EXTERNAL_DISP));
-#endif
 
     CHECK_EQ(0,
             native_window_set_scaling_mode(
@@ -212,7 +201,7 @@ void SoftwareRenderer::clearTracker() {
 }
 
 std::list<FrameRenderTracker::Info> SoftwareRenderer::render(
-        const void *data, size_t size, int64_t mediaTimeUs, nsecs_t renderTimeNs,
+        const void *data, size_t , int64_t mediaTimeUs, nsecs_t renderTimeNs,
         void* /*platformPrivate*/, const sp<AMessage>& format) {
     resetFormatIfChanged(format);
     FrameRenderTracker::Info *info = NULL;
@@ -251,26 +240,25 @@ std::list<FrameRenderTracker::Info> SoftwareRenderer::render(
                 buf->stride, buf->height,
                 0, 0, mCropWidth - 1, mCropHeight - 1);
     } else if (mColorFormat == OMX_COLOR_FormatYUV420Planar) {
-        if ((size_t)mWidth * mHeight * 3 / 2 > size) {
-            goto skip_copying;
-        }
         const uint8_t *src_y = (const uint8_t *)data;
         const uint8_t *src_u =
                 (const uint8_t *)data + mWidth * mHeight;
         const uint8_t *src_v = src_u + (mWidth / 2 * mHeight / 2);
 
+        src_y +=mCropLeft + mCropTop * mWidth;
+        src_u +=(mCropLeft + mCropTop * mWidth / 2)/2;
+        src_v +=(mCropLeft + mCropTop * mWidth / 2)/2;
+
         uint8_t *dst_y = (uint8_t *)dst;
         size_t dst_y_size = buf->stride * buf->height;
-
-#ifdef EXYNOS4_ENHANCEMENTS
-        size_t dst_c_stride = buf->stride / 2;
-        size_t dst_c_size = ALIGN(dst_c_stride, 16) * buf->height / 2;
-#else
         size_t dst_c_stride = ALIGN(buf->stride / 2, 16);
         size_t dst_c_size = dst_c_stride * buf->height / 2;
-#endif
         uint8_t *dst_v = dst_y + dst_y_size;
         uint8_t *dst_u = dst_v + dst_c_size;
+
+        dst_y += mCropTop * buf->stride + mCropLeft;
+        dst_v += (mCropTop/2) * dst_c_stride + mCropLeft/2;
+        dst_u += (mCropTop/2) * dst_c_stride + mCropLeft/2;
 
         for (int y = 0; y < mCropHeight; ++y) {
             memcpy(dst_y, src_y, mCropWidth);
@@ -290,32 +278,24 @@ std::list<FrameRenderTracker::Info> SoftwareRenderer::render(
         }
     } else if (mColorFormat == OMX_TI_COLOR_FormatYUV420PackedSemiPlanar
             || mColorFormat == OMX_COLOR_FormatYUV420SemiPlanar) {
-        if ((size_t)mWidth * mHeight * 3 / 2 > size) {
-            goto skip_copying;
-        }
         const uint8_t *src_y = (const uint8_t *)data;
         const uint8_t *src_uv = (const uint8_t *)data
-                + mWidth * (mHeight - mCropTop / 2);
+                + mWidth * mHeight;
 
-#ifdef EXYNOS4_ENHANCEMENTS
-        void *pYUVBuf[3];
+        src_y += mCropLeft + mCropTop * mWidth;
+        src_uv += (mCropLeft + mCropTop * mWidth) / 2;
 
-        CHECK_EQ(0, mapper.unlock(buf->handle));
-        CHECK_EQ(0, mapper.lock(
-                buf->handle, GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_YUV_ADDR, bounds, pYUVBuf));
-
-        size_t dst_c_stride = buf->stride / 2;
-        uint8_t *dst_y = (uint8_t *)pYUVBuf[0];
-        uint8_t *dst_v = (uint8_t *)pYUVBuf[1];
-        uint8_t *dst_u = (uint8_t *)pYUVBuf[2];
-#else
         uint8_t *dst_y = (uint8_t *)dst;
+
         size_t dst_y_size = buf->stride * buf->height;
         size_t dst_c_stride = ALIGN(buf->stride / 2, 16);
         size_t dst_c_size = dst_c_stride * buf->height / 2;
         uint8_t *dst_v = dst_y + dst_y_size;
         uint8_t *dst_u = dst_v + dst_c_size;
-#endif
+
+        dst_y += mCropTop * buf->stride + mCropLeft;
+        dst_v += (mCropTop/2) * dst_c_stride + mCropLeft/2;
+        dst_u += (mCropTop/2) * dst_c_stride + mCropLeft/2;
 
         for (int y = 0; y < mCropHeight; ++y) {
             memcpy(dst_y, src_y, mCropWidth);
@@ -336,11 +316,8 @@ std::list<FrameRenderTracker::Info> SoftwareRenderer::render(
             dst_v += dst_c_stride;
         }
     } else if (mColorFormat == OMX_COLOR_Format24bitRGB888) {
-        if ((size_t)mWidth * mHeight * 3 > size) {
-            goto skip_copying;
-        }
-        uint8_t* srcPtr = (uint8_t*)data;
-        uint8_t* dstPtr = (uint8_t*)dst;
+        uint8_t* srcPtr = (uint8_t*)data + mWidth * mCropTop * 3 + mCropLeft * 3;
+        uint8_t* dstPtr = (uint8_t*)dst + buf->stride * mCropTop * 3 + mCropLeft * 3;
 
         for (size_t y = 0; y < (size_t)mCropHeight; ++y) {
             memcpy(dstPtr, srcPtr, mCropWidth * 3);
@@ -348,14 +325,11 @@ std::list<FrameRenderTracker::Info> SoftwareRenderer::render(
             dstPtr += buf->stride * 3;
         }
     } else if (mColorFormat == OMX_COLOR_Format32bitARGB8888) {
-        if ((size_t)mWidth * mHeight * 4 > size) {
-            goto skip_copying;
-        }
         uint8_t *srcPtr, *dstPtr;
 
         for (size_t y = 0; y < (size_t)mCropHeight; ++y) {
-            srcPtr = (uint8_t*)data + mWidth * 4 * y;
-            dstPtr = (uint8_t*)dst + buf->stride * 4 * y;
+            srcPtr = (uint8_t*)data + mWidth * 4 * (y + mCropTop) + mCropLeft * 4;
+            dstPtr = (uint8_t*)dst + buf->stride * 4 * (y + mCropTop) + mCropLeft * 4;
             for (size_t x = 0; x < (size_t)mCropWidth; ++x) {
                 uint8_t a = *srcPtr++;
                 for (size_t i = 0; i < 3; ++i) {   // copy RGB
@@ -365,11 +339,8 @@ std::list<FrameRenderTracker::Info> SoftwareRenderer::render(
             }
         }
     } else if (mColorFormat == OMX_COLOR_Format32BitRGBA8888) {
-        if ((size_t)mWidth * mHeight * 4 > size) {
-            goto skip_copying;
-        }
-        uint8_t* srcPtr = (uint8_t*)data;
-        uint8_t* dstPtr = (uint8_t*)dst;
+        uint8_t* srcPtr = (uint8_t*)data + mWidth * mCropTop * 4 + mCropLeft * 4;
+        uint8_t* dstPtr = (uint8_t*)dst + buf->stride * mCropTop * 4 + mCropLeft * 4;
 
         for (size_t y = 0; y < (size_t)mCropHeight; ++y) {
             memcpy(dstPtr, srcPtr, mCropWidth * 4);

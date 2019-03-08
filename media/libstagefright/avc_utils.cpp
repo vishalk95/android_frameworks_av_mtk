@@ -80,7 +80,16 @@ static void skipScalingList(ABitReader *br, size_t sizeOfScalingList) {
     for (size_t j = 0; j < sizeOfScalingList; ++j) {
         if (nextScale != 0) {
             signed delta_scale = parseSE(br);
-            nextScale = (lastScale + delta_scale + 256) % 256;
+            // ISO_IEC_14496-10_201402-ITU, 7.4.2.1.1.1, The value of delta_scale
+            // shall be in the range of −128 to +127, inclusive.
+            if (delta_scale < -128) {
+                ALOGW("delta_scale (%d) is below range, capped to -128", delta_scale);
+                delta_scale = -128;
+            } else if (delta_scale > 127) {
+                ALOGW("delta_scale (%d) is above range, capped to 127", delta_scale);
+                delta_scale = 127;
+            }
+            nextScale = (lastScale + (delta_scale + 256)) % 256;
         }
 
         lastScale = (nextScale == 0) ? lastScale : nextScale;
@@ -420,8 +429,8 @@ sp<MetaData> MakeAVCCodecSpecificData(const sp<ABuffer> &accessUnit) {
     meta->setInt32(kKeyWidth, width);
     meta->setInt32(kKeyHeight, height);
 
-    if (sarWidth > 1 && sarHeight > 1) {
-        // We treat 0:0 (unspecified) as 1:1.
+    if ((sarWidth > 0 && sarHeight > 0) && (sarWidth != 1 || sarHeight != 1)) {
+        // We treat *:0 and 0:* (unspecified) as 1:1.
 
         meta->setInt32(kKeySARWidth, sarWidth);
         meta->setInt32(kKeySARHeight, sarHeight);
@@ -447,7 +456,8 @@ sp<MetaData> MakeAVCCodecSpecificData(const sp<ABuffer> &accessUnit) {
     return meta;
 }
 
-bool IsIDR(const sp<ABuffer> &buffer) {
+template <typename T>
+bool IsIDRInternal(const sp<T> &buffer) {
     const uint8_t *data = buffer->data();
     size_t size = buffer->size();
 
@@ -472,14 +482,29 @@ bool IsIDR(const sp<ABuffer> &buffer) {
     return foundIDR;
 }
 
+bool IsIDR(const sp<ABuffer> &buffer) {
+    return IsIDRInternal(buffer);
+}
+
+bool IsIDR(const sp<MediaCodecBuffer> &buffer) {
+    return IsIDRInternal(buffer);
+}
+
 bool IsAVCReferenceFrame(const sp<ABuffer> &accessUnit) {
     const uint8_t *data = accessUnit->data();
     size_t size = accessUnit->size();
+    if (data == NULL) {
+        ALOGE("IsAVCReferenceFrame: called on NULL data (%p, %zu)", accessUnit.get(), size);
+        return false;
+    }
 
     const uint8_t *nalStart;
     size_t nalSize;
     while (getNextNALUnit(&data, &size, &nalStart, &nalSize, true) == OK) {
-        CHECK_GT(nalSize, 0u);
+        if (nalSize == 0) {
+            ALOGE("IsAVCReferenceFrame: invalid nalSize: 0 (%p, %zu)", accessUnit.get(), size);
+            return false;
+        }
 
         unsigned nalType = nalStart[0] & 0x1f;
 
@@ -492,6 +517,28 @@ bool IsAVCReferenceFrame(const sp<ABuffer> &accessUnit) {
     }
 
     return true;
+}
+
+uint32_t FindAVCLayerId(const uint8_t *data, size_t size) {
+    CHECK(data != NULL);
+
+    const unsigned kSvcNalType = 0xE;
+    const unsigned kSvcNalSearchRange = 32;
+    // SVC NAL
+    // |---0 1110|1--- ----|---- ----|iii- ---|
+    //       ^                        ^
+    //   NAL-type = 0xE               layer-Id
+    //
+    // layer_id 0 is for base layer, while 1, 2, ... are enhancement layers.
+    // Layer n uses reference frames from layer 0, 1, ..., n-1.
+
+    uint32_t layerId = 0;
+    sp<ABuffer> svcNAL = FindNAL(
+            data, size > kSvcNalSearchRange ? kSvcNalSearchRange : size, kSvcNalType);
+    if (svcNAL != NULL && svcNAL->size() >= 4) {
+        layerId = (*(svcNAL->data() + 3) >> 5) & 0x7;
+    }
+    return layerId;
 }
 
 sp<MetaData> MakeAACCodecSpecificData(

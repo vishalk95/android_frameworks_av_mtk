@@ -37,7 +37,7 @@ enum {
 };
 
 struct BpHDCPObserver : public BpInterface<IHDCPObserver> {
-    BpHDCPObserver(const sp<IBinder> &impl)
+    explicit BpHDCPObserver(const sp<IBinder> &impl)
         : BpInterface<IHDCPObserver>(impl) {
     }
 
@@ -58,7 +58,7 @@ struct BpHDCPObserver : public BpInterface<IHDCPObserver> {
 IMPLEMENT_META_INTERFACE(HDCPObserver, "android.hardware.IHDCPObserver");
 
 struct BpHDCP : public BpInterface<IHDCP> {
-    BpHDCP(const sp<IBinder> &impl)
+    explicit BpHDCP(const sp<IBinder> &impl)
         : BpInterface<IHDCP>(impl) {
     }
 
@@ -240,6 +240,8 @@ status_t BnHDCP::onTransact(
 
         case HDCP_ENCRYPT:
         {
+            CHECK_INTERFACE(IHDCP, data, reply);
+
             size_t size = data.readInt32();
             void *inData = NULL;
             // watch out for overflow
@@ -313,6 +315,8 @@ status_t BnHDCP::onTransact(
 
         case HDCP_DECRYPT:
         {
+            CHECK_INTERFACE(IHDCP, data, reply);
+
             size_t size = data.readInt32();
             size_t bufSize = 2 * size;
 

@@ -12,25 +12,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * This file was modified by Dolby Laboratories, Inc. The portions of the
- * code that are surrounded by "DOLBY..." are copyrighted and
- * licensed separately, as follows:
- *
- *  (C) 2011-2016 Dolby Laboratories, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
  */
 
 #ifndef A_TS_PARSER_H_
@@ -45,11 +26,19 @@
 #include <utils/KeyedVector.h>
 #include <utils/Vector.h>
 #include <utils/RefBase.h>
+#include <vector>
 
 namespace android {
+namespace hardware {
+namespace cas {
+namespace V1_0 {
+struct ICas;
+}}}
+using hardware::cas::V1_0::ICas;
 
 class ABitReader;
 struct ABuffer;
+struct AnotherPacketSource;
 
 struct ATSParser : public RefBase {
     enum DiscontinuityType {
@@ -81,18 +70,26 @@ struct ATSParser : public RefBase {
         ALIGNED_VIDEO_DATA         = 2,
     };
 
+    enum SourceType {
+        VIDEO = 0,
+        AUDIO = 1,
+        META  = 2,
+        NUM_SOURCE_TYPES = 3
+    };
+
     // Event is used to signal sync point event at feedTSPacket().
     struct SyncEvent {
-        SyncEvent(off64_t offset);
+        explicit SyncEvent(off64_t offset);
 
         void init(off64_t offset, const sp<MediaSource> &source,
-                int64_t timeUs);
+                int64_t timeUs, SourceType type);
 
         bool hasReturnedData() const { return mHasReturnedData; }
         void reset();
         off64_t getOffset() const { return mOffset; }
         const sp<MediaSource> &getMediaSource() const { return mMediaSource; }
         int64_t getTimeUs() const { return mTimeUs; }
+        SourceType getType() const { return mType; }
 
     private:
         bool mHasReturnedData;
@@ -106,9 +103,12 @@ struct ATSParser : public RefBase {
         sp<MediaSource> mMediaSource;
         /* The timestamp of the sync frame. */
         int64_t mTimeUs;
+        SourceType mType;
     };
 
-    ATSParser(uint32_t flags = 0);
+    explicit ATSParser(uint32_t flags = 0);
+
+    status_t setMediaCas(const sp<ICas> &cas);
 
     // Feed a TS packet into the parser. uninitialized event with the start
     // offset of this TS packet goes in, and if the parser detects PES with
@@ -126,16 +126,14 @@ struct ATSParser : public RefBase {
 
     void signalEOS(status_t finalResult);
 
-    enum SourceType {
-        VIDEO = 0,
-        AUDIO = 1,
-        META  = 2,
-        NUM_SOURCE_TYPES = 3
-    };
     sp<MediaSource> getSource(SourceType type);
     bool hasSource(SourceType type) const;
 
     bool PTSTimeDeltaEstablished();
+
+    int64_t getFirstPTSTimeUs();
+
+    void signalNewSampleAesKey(const sp<AMessage> &keyItem);
 
     enum {
         // From ISO/IEC 13818-1: 2000 (E), Table 2-29
@@ -148,7 +146,6 @@ struct ATSParser : public RefBase {
         STREAMTYPE_MPEG4_VIDEO          = 0x10,
         STREAMTYPE_METADATA             = 0x15,
         STREAMTYPE_H264                 = 0x1b,
-        STREAMTYPE_H265                 = 0x24,
 
         // From ATSC A/53 Part 3:2009, 6.7.1
         STREAMTYPE_AC3                  = 0x81,
@@ -156,9 +153,11 @@ struct ATSParser : public RefBase {
         // Stream type 0x83 is non-standard,
         // it could be LPCM or TrueHD AC3
         STREAMTYPE_LPCM_AC3             = 0x83,
-#ifdef DOLBY_ENABLE
-        STREAMTYPE_EAC3                 = 0x87,
-#endif // DOLBY_END
+
+        //Sample Encrypted types
+        STREAMTYPE_H264_ENCRYPTED       = 0xDB,
+        STREAMTYPE_AAC_ENCRYPTED        = 0xCF,
+        STREAMTYPE_AC3_ENCRYPTED        = 0xC1,
     };
 
 protected:
@@ -168,6 +167,14 @@ private:
     struct Program;
     struct Stream;
     struct PSISection;
+    struct CasManager;
+    struct CADescriptor {
+        int32_t mSystemID;
+        unsigned mPID;
+        std::vector<uint8_t> mPrivateData;
+    };
+
+    sp<CasManager> mCasManager;
 
     uint32_t mFlags;
     Vector<sp<Program> > mPrograms;
@@ -182,6 +189,8 @@ private:
     int64_t mLastRecoveredPTS;
 
     size_t mNumTSPacketsParsed;
+
+    sp<AMessage> mSampleAesKeyItem;
 
     void parseProgramAssociationTable(ABitReader *br);
     void parseProgramMap(ABitReader *br);
@@ -199,9 +208,13 @@ private:
         ABitReader *br, unsigned PID,
         unsigned continuity_counter,
         unsigned payload_unit_start_indicator,
+        unsigned transport_scrambling_control,
+        unsigned random_access_indicator,
         SyncEvent *event);
 
-    status_t parseAdaptationField(ABitReader *br, unsigned PID);
+    status_t parseAdaptationField(
+            ABitReader *br, unsigned PID, unsigned *random_access_indicator);
+
     // see feedTSPacket().
     status_t parseTS(ABitReader *br, SyncEvent *event);
 

@@ -27,13 +27,14 @@
 namespace android {
 
 enum {
-    GET_OMX = IBinder::FIRST_CALL_TRANSACTION
+    GET_OMX = IBinder::FIRST_CALL_TRANSACTION,
+    GET_OMX_STORE
 };
 
 class BpMediaCodecService : public BpInterface<IMediaCodecService>
 {
 public:
-    BpMediaCodecService(const sp<IBinder>& impl)
+    explicit BpMediaCodecService(const sp<IBinder>& impl)
         : BpInterface<IMediaCodecService>(impl)
     {
     }
@@ -43,6 +44,13 @@ public:
         data.writeInterfaceToken(IMediaCodecService::getInterfaceDescriptor());
         remote()->transact(GET_OMX, data, &reply);
         return interface_cast<IOMX>(reply.readStrongBinder());
+    }
+
+    virtual sp<IOMXStore> getOMXStore() {
+        Parcel data, reply;
+        data.writeInterfaceToken(IMediaCodecService::getInterfaceDescriptor());
+        remote()->transact(GET_OMX_STORE, data, &reply);
+        return interface_cast<IOMXStore>(reply.readStrongBinder());
     }
 
 };
@@ -60,6 +68,12 @@ status_t BnMediaCodecService::onTransact(
             CHECK_INTERFACE(IMediaCodecService, data, reply);
             sp<IOMX> omx = getOMX();
             reply->writeStrongBinder(IInterface::asBinder(omx));
+            return NO_ERROR;
+        }
+        case GET_OMX_STORE: {
+            CHECK_INTERFACE(IMediaCodecService, data, reply);
+            sp<IOMXStore> omxStore = getOMXStore();
+            reply->writeStrongBinder(IInterface::asBinder(omxStore));
             return NO_ERROR;
         }
         default:

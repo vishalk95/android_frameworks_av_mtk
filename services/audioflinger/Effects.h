@@ -25,10 +25,11 @@
 // state changes or resource modifications. Always respect the following order
 // if multiple mutexes must be acquired to avoid cross deadlock:
 // AudioFlinger -> ThreadBase -> EffectChain -> EffectModule
+// AudioHandle -> ThreadBase -> EffectChain -> EffectModule
 // In addition, methods that lock the AudioPolicyService mutex (getOutputForEffect(),
-// startOutput()...) should never be called with AudioFlinger or Threadbase mutex locked
-// to avoid cross deadlock with other clients calling AudioPolicyService methods that in turn
-// call AudioFlinger thus locking the same mutexes in the reverse order.
+// startOutput(), getInputForAttr(), releaseInput()...) should never be called with AudioFlinger or
+// Threadbase mutex locked to avoid cross deadlock with other clients calling AudioPolicyService
+// methods that in turn call AudioFlinger thus locking the same mutexes in the reverse order.
 
 // The EffectModule class is a wrapper object controlling the effect engine implementation
 // in the effect library. It prevents concurrent calls to process() and command() functions
@@ -85,10 +86,14 @@ public:
     bool isEnabled() const;
     bool isProcessEnabled() const;
 
-    void        setInBuffer(int16_t *buffer) { mConfig.inputCfg.buffer.s16 = buffer; }
-    int16_t     *inBuffer() { return mConfig.inputCfg.buffer.s16; }
-    void        setOutBuffer(int16_t *buffer) { mConfig.outputCfg.buffer.s16 = buffer; }
-    int16_t     *outBuffer() { return mConfig.outputCfg.buffer.s16; }
+    void        setInBuffer(const sp<EffectBufferHalInterface>& buffer);
+    int16_t     *inBuffer() const {
+        return mInBuffer != 0 ? reinterpret_cast<int16_t*>(mInBuffer->ptr()) : NULL;
+    }
+    void        setOutBuffer(const sp<EffectBufferHalInterface>& buffer);
+    int16_t     *outBuffer() const {
+        return mOutBuffer != 0 ? reinterpret_cast<int16_t*>(mOutBuffer->ptr()) : NULL;
+    }
     void        setChain(const wp<EffectChain>& chain) { mChain = chain; }
     void        setThread(const wp<ThreadBase>& thread) { mThread = thread; }
     const wp<ThreadBase>& thread() { return mThread; }
@@ -130,15 +135,14 @@ public:
 
     void             dump(int fd, const Vector<String16>& args);
 
-protected:
+private:
     friend class AudioFlinger;      // for mHandles
     bool                mPinned;
 
     // Maximum time allocated to effect engines to complete the turn off sequence
     static const uint32_t MAX_DISABLE_TIME_MS = 10000;
 
-    EffectModule(const EffectModule&);
-    EffectModule& operator = (const EffectModule&);
+    DISALLOW_COPY_AND_ASSIGN(EffectModule);
 
     status_t start_l();
     status_t stop_l();
@@ -151,7 +155,9 @@ mutable Mutex               mLock;      // mutex for process, commands and handl
     const audio_session_t mSessionId; // audio session ID
     const effect_descriptor_t mDescriptor;// effect descriptor received from effect engine
     effect_config_t     mConfig;    // input and output audio configuration
-    effect_handle_t  mEffectInterface; // Effect module C API
+    sp<EffectHalInterface> mEffectInterface; // Effect module HAL
+    sp<EffectBufferHalInterface> mInBuffer;  // Buffers for interacting with HAL
+    sp<EffectBufferHalInterface> mOutBuffer;
     status_t            mStatus;    // initialization status
     effect_state        mState;     // current activation state
     Vector<EffectHandle *> mHandles;    // list of client handles
@@ -225,10 +231,9 @@ public:
 
     void dumpToBuffer(char* buffer, size_t size);
 
-protected:
+private:
     friend class AudioFlinger;          // for mEffect, mHasControl, mEnabled
-    EffectHandle(const EffectHandle&);
-    EffectHandle& operator =(const EffectHandle&);
+    DISALLOW_COPY_AND_ASSIGN(EffectHandle);
 
     Mutex mLock;                        // protects IEffect method calls
     wp<EffectModule> mEffect;           // pointer to controlled EffectModule
@@ -300,18 +305,17 @@ public:
     void setMode_l(audio_mode_t mode);
     void setAudioSource_l(audio_source_t source);
 
-    void setInBuffer(int16_t *buffer, bool ownsBuffer = false) {
+    void setInBuffer(const sp<EffectBufferHalInterface>& buffer) {
         mInBuffer = buffer;
-        mOwnInBuffer = ownsBuffer;
     }
     int16_t *inBuffer() const {
-        return mInBuffer;
+        return mInBuffer != 0 ? reinterpret_cast<int16_t*>(mInBuffer->ptr()) : NULL;
     }
-    void setOutBuffer(int16_t *buffer) {
+    void setOutBuffer(const sp<EffectBufferHalInterface>& buffer) {
         mOutBuffer = buffer;
     }
     int16_t *outBuffer() const {
-        return mOutBuffer;
+        return mOutBuffer != 0 ? reinterpret_cast<int16_t*>(mOutBuffer->ptr()) : NULL;
     }
 
     void incTrackCnt() { android_atomic_inc(&mTrackCnt); }
@@ -327,7 +331,8 @@ public:
     void setStrategy(uint32_t strategy)
             { mStrategy = strategy; }
 
-    // suspend effect of the given type
+    // suspend or restore effects of the specified type. The number of suspend requests is counted
+    // and restore occurs once all suspend requests are cancelled.
     void setEffectSuspended_l(const effect_uuid_t *type,
                               bool suspend);
     // suspend all eligible effects
@@ -360,16 +365,15 @@ public:
 
     void dump(int fd, const Vector<String16>& args);
 
-protected:
+private:
     friend class AudioFlinger;  // for mThread, mEffects
-    EffectChain(const EffectChain&);
-    EffectChain& operator =(const EffectChain&);
+    DISALLOW_COPY_AND_ASSIGN(EffectChain);
 
     class SuspendedEffectDesc : public RefBase {
     public:
         SuspendedEffectDesc() : mRefCount(0) {}
 
-        int mRefCount;
+        int mRefCount;   // > 0 when suspended
         effect_uuid_t mType;
         wp<EffectModule> mEffect;
     };
@@ -385,7 +389,9 @@ protected:
     // types or implementations from the suspend/restore mechanism.
     bool isEffectEligibleForSuspend(const effect_descriptor_t& desc);
 
-    void clearInputBuffer_l(sp<ThreadBase> thread);
+    static bool isEffectEligibleForBtNrecSuspend(const effect_uuid_t *type);
+
+    void clearInputBuffer_l(const sp<ThreadBase>& thread);
 
     void setThread(const sp<ThreadBase>& thread);
 
@@ -393,8 +399,8 @@ protected:
     mutable  Mutex mLock;        // mutex protecting effect list
              Vector< sp<EffectModule> > mEffects; // list of effect modules
              audio_session_t mSessionId; // audio session ID
-             int16_t *mInBuffer;         // chain input buffer
-             int16_t *mOutBuffer;        // chain output buffer
+             sp<EffectBufferHalInterface> mInBuffer;  // chain input buffer
+             sp<EffectBufferHalInterface> mOutBuffer; // chain output buffer
 
     // 'volatile' here means these are accessed with atomic operations instead of mutex
     volatile int32_t mActiveTrackCnt;    // number of active tracks connected
@@ -402,7 +408,6 @@ protected:
 
              int32_t mTailBufferCount;   // current effect tail buffer count
              int32_t mMaxTailBuffers;    // maximum effect tail buffers
-             bool mOwnInBuffer;          // true if the chain owns its input buffer
              int mVolumeCtrlIdx;         // index of insert effect having control over volume
              uint32_t mLeftVolume;       // previous volume on left channel
              uint32_t mRightVolume;      // previous volume on right channel
@@ -412,6 +417,6 @@ protected:
              // mSuspendedEffects lists all effects currently suspended in the chain.
              // Use effect type UUID timelow field as key. There is no real risk of identical
              // timeLow fields among effect type UUIDs.
-             // Updated by updateSuspendedSessions_l() only.
+             // Updated by setEffectSuspended_l() and setEffectSuspendedAll_l() only.
              KeyedVector< int, sp<SuspendedEffectDesc> > mSuspendedEffects;
 };

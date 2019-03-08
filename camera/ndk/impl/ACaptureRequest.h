@@ -16,13 +16,13 @@
 #ifndef _ACAPTURE_REQUEST_H
 #define _ACAPTURE_REQUEST_H
 
-#include "NdkCaptureRequest.h"
+#include <camera/NdkCaptureRequest.h>
 #include <set>
 
 using namespace android;
 
 struct ACameraOutputTarget {
-    ACameraOutputTarget(ANativeWindow* window) : mWindow(window) {};
+    explicit ACameraOutputTarget(ANativeWindow* window) : mWindow(window) {};
 
     bool operator == (const ACameraOutputTarget& other) const {
         return mWindow == other.mWindow;

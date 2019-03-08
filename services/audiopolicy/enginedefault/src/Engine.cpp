@@ -31,7 +31,6 @@
 #include <policy.h>
 #include <utils/String8.h>
 #include <utils/Log.h>
-#include <cutils/properties.h>
 
 namespace android
 {
@@ -203,6 +202,7 @@ routing_strategy Engine::getStrategyForUsage(audio_usage_t usage)
 
     case AUDIO_USAGE_MEDIA:
     case AUDIO_USAGE_GAME:
+    case AUDIO_USAGE_ASSISTANT:
     case AUDIO_USAGE_ASSISTANCE_NAVIGATION_GUIDANCE:
     case AUDIO_USAGE_ASSISTANCE_SONIFICATION:
         return STRATEGY_MEDIA;
@@ -250,13 +250,6 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
 {
     uint32_t device = AUDIO_DEVICE_NONE;
     uint32_t availableOutputDevicesType = availableOutputDevices.types();
-    bool isFmA2dpConcurrencyOn = property_get_bool("fm.a2dp.conc.disabled", false);
-
-    // Do not support a2dp device when FM is active based on concurrency property
-    if (isFmA2dpConcurrencyOn && (availableOutputDevicesType & AUDIO_DEVICE_OUT_FM)) {
-        ALOGV("FM a2dp concurrency is set, not considering a2dp for device selection");
-        availableOutputDevicesType = availableOutputDevicesType & ~AUDIO_DEVICE_OUT_ALL_A2DP;
-    }
 
     switch (strategy) {
 
@@ -284,8 +277,11 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
                 device &= ~AUDIO_DEVICE_OUT_SPEAKER;
             }
         } else if (outputs.isStreamActive(
-                                AUDIO_STREAM_MUSIC, SONIFICATION_RESPECTFUL_AFTER_MUSIC_DELAY)) {
-            // while media is playing (or has recently played), use the same device
+                                AUDIO_STREAM_MUSIC, SONIFICATION_RESPECTFUL_AFTER_MUSIC_DELAY)
+                    || outputs.isStreamActive(
+                            AUDIO_STREAM_ACCESSIBILITY, SONIFICATION_RESPECTFUL_AFTER_MUSIC_DELAY))
+        {
+            // while media/a11y is playing (or has recently played), use the same device
             device = getDeviceForStrategyInt(
                     STRATEGY_MEDIA, availableOutputDevices, availableInputDevices, outputs);
         } else {
@@ -328,8 +324,7 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
             if (((availableInputDevices.types() &
                     AUDIO_DEVICE_IN_TELEPHONY_RX & ~AUDIO_DEVICE_BIT_IN) == 0) ||
                     (((txDevice & availPrimaryInputDevices & ~AUDIO_DEVICE_BIT_IN) != 0) &&
-                         (primaryOutput->getAudioPort()->getModuleVersion() <
-                             AUDIO_DEVICE_API_VERSION_3_0))) {
+                         (primaryOutput->getAudioPort()->getModuleVersionMajor() < 3))) {
                 availableOutputDevicesType = availPrimaryOutputDevices;
             }
         }
@@ -352,7 +347,7 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
             // when not in a phone call, phone strategy should route STREAM_VOICE_CALL to A2DP
             if (!isInCall() &&
                     (mForceUse[AUDIO_POLICY_FORCE_FOR_MEDIA] != AUDIO_POLICY_FORCE_NO_BT_A2DP) &&
-                    (outputs.isA2dpOnPrimary() || (outputs.getA2dpOutput() != 0))) {
+                    (outputs.getA2dpOutput() != 0)) {
                 device = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP;
                 if (device) break;
                 device = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES;
@@ -363,6 +358,8 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
             device = availableOutputDevicesType & AUDIO_DEVICE_OUT_WIRED_HEADSET;
             if (device) break;
             device = availableOutputDevicesType & AUDIO_DEVICE_OUT_LINE;
+            if (device) break;
+            device = availableOutputDevicesType & AUDIO_DEVICE_OUT_USB_HEADSET;
             if (device) break;
             device = availableOutputDevicesType & AUDIO_DEVICE_OUT_USB_DEVICE;
             if (device) break;
@@ -384,7 +381,7 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
             // A2DP speaker when forcing to speaker output
             if (!isInCall() &&
                     (mForceUse[AUDIO_POLICY_FORCE_FOR_MEDIA] != AUDIO_POLICY_FORCE_NO_BT_A2DP) &&
-                    (outputs.isA2dpOnPrimary() || (outputs.getA2dpOutput() != 0))) {
+                    (outputs.getA2dpOutput() != 0)) {
                 device = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER;
                 if (device) break;
             }
@@ -426,6 +423,25 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
                 (mForceUse[AUDIO_POLICY_FORCE_FOR_SYSTEM] == AUDIO_POLICY_FORCE_SYSTEM_ENFORCED)) {
             device = availableOutputDevicesType & AUDIO_DEVICE_OUT_SPEAKER;
         }
+
+        // if SCO headset is connected and we are told to use it, play ringtone over
+        // speaker and BT SCO
+        if (((availableOutputDevicesType & AUDIO_DEVICE_OUT_ALL_SCO) != 0) &&
+                (mForceUse[AUDIO_POLICY_FORCE_FOR_COMMUNICATION] == AUDIO_POLICY_FORCE_BT_SCO)) {
+            uint32_t device2 = AUDIO_DEVICE_NONE;
+            device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO_CARKIT;
+            if (device2 == AUDIO_DEVICE_NONE) {
+                device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET;
+            }
+            if (device2 == AUDIO_DEVICE_NONE) {
+                device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO;
+            }
+
+            if (device2 != AUDIO_DEVICE_NONE) {
+                device |= device2;
+                break;
+            }
+        }
         // The second device used for sonification is the same as the device used by media strategy
         // FALL THROUGH
 
@@ -461,13 +477,6 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
     case STRATEGY_REROUTING:
     case STRATEGY_MEDIA: {
         uint32_t device2 = AUDIO_DEVICE_NONE;
-
-        if (isInCall() && (device == AUDIO_DEVICE_NONE)) {
-            // when in call, get the device for Phone strategy
-            device = getDeviceForStrategy(STRATEGY_PHONE);
-            break;
-        }
-
         if (strategy != STRATEGY_SONIFICATION) {
             // no sonification on remote submix (e.g. WFD)
             if (availableOutputDevices.getDevice(AUDIO_DEVICE_OUT_REMOTE_SUBMIX,
@@ -482,7 +491,7 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
         }
         if ((device2 == AUDIO_DEVICE_NONE) &&
                 (mForceUse[AUDIO_POLICY_FORCE_FOR_MEDIA] != AUDIO_POLICY_FORCE_NO_BT_A2DP) &&
-                (outputs.isA2dpOnPrimary() || (outputs.getA2dpOutput() != 0))) {
+                (outputs.getA2dpOutput() != 0)) {
             device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP;
             if (device2 == AUDIO_DEVICE_NONE) {
                 device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES;
@@ -505,6 +514,9 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
             device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_WIRED_HEADSET;
         }
         if (device2 == AUDIO_DEVICE_NONE) {
+            device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_USB_HEADSET;
+        }
+        if (device2 == AUDIO_DEVICE_NONE) {
             device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_USB_ACCESSORY;
         }
         if (device2 == AUDIO_DEVICE_NONE) {
@@ -513,23 +525,14 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
         if (device2 == AUDIO_DEVICE_NONE) {
             device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET;
         }
-        if ((strategy != STRATEGY_SONIFICATION) && (device == AUDIO_DEVICE_NONE)
-            && (device2 == AUDIO_DEVICE_NONE)) {
+        if ((device2 == AUDIO_DEVICE_NONE) && (strategy != STRATEGY_SONIFICATION)) {
             // no sonification on aux digital (e.g. HDMI)
             device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_AUX_DIGITAL;
         }
         if ((device2 == AUDIO_DEVICE_NONE) &&
-                (mForceUse[AUDIO_POLICY_FORCE_FOR_DOCK] == AUDIO_POLICY_FORCE_ANALOG_DOCK)
-                && (strategy != STRATEGY_SONIFICATION)) {
+                (mForceUse[AUDIO_POLICY_FORCE_FOR_DOCK] == AUDIO_POLICY_FORCE_ANALOG_DOCK)) {
             device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET;
         }
-#ifdef AUDIO_EXTN_AFE_PROXY_ENABLED
-        if ((strategy != STRATEGY_SONIFICATION) && (device == AUDIO_DEVICE_NONE)
-            && (device2 == AUDIO_DEVICE_NONE)) {
-            // no sonification on WFD sink
-            device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_PROXY;
-        }
-#endif
         if (device2 == AUDIO_DEVICE_NONE) {
             device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_SPEAKER;
         }
@@ -550,6 +553,15 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
         if ((strategy == STRATEGY_MEDIA) &&
             (mForceUse[AUDIO_POLICY_FORCE_FOR_HDMI_SYSTEM_AUDIO] ==
                 AUDIO_POLICY_FORCE_HDMI_SYSTEM_AUDIO_ENFORCED)) {
+            device &= ~AUDIO_DEVICE_OUT_SPEAKER;
+        }
+
+        // for STRATEGY_SONIFICATION:
+        // if SPEAKER was selected, and SPEAKER_SAFE is available, use SPEAKER_SAFE instead
+        if ((strategy == STRATEGY_SONIFICATION) &&
+                (device & AUDIO_DEVICE_OUT_SPEAKER) &&
+                (availableOutputDevicesType & AUDIO_DEVICE_OUT_SPEAKER_SAFE)) {
+            device |= AUDIO_DEVICE_OUT_SPEAKER_SAFE;
             device &= ~AUDIO_DEVICE_OUT_SPEAKER;
         }
         } break;
@@ -596,6 +608,8 @@ audio_devices_t Engine::getDeviceForInputSource(audio_source_t inputSource) cons
         device = AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET;
     } else if (availableDeviceTypes & AUDIO_DEVICE_IN_WIRED_HEADSET) {
         device = AUDIO_DEVICE_IN_WIRED_HEADSET;
+    } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_HEADSET) {
+        device = AUDIO_DEVICE_IN_USB_HEADSET;
     } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_DEVICE) {
         device = AUDIO_DEVICE_IN_USB_DEVICE;
     } else if (availableDeviceTypes & AUDIO_DEVICE_IN_BUILTIN_MIC) {
@@ -626,6 +640,8 @@ audio_devices_t Engine::getDeviceForInputSource(audio_source_t inputSource) cons
         default:    // FORCE_NONE
             if (availableDeviceTypes & AUDIO_DEVICE_IN_WIRED_HEADSET) {
                 device = AUDIO_DEVICE_IN_WIRED_HEADSET;
+            } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_HEADSET) {
+                device = AUDIO_DEVICE_IN_USB_HEADSET;
             } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_DEVICE) {
                 device = AUDIO_DEVICE_IN_USB_DEVICE;
             } else if (availableDeviceTypes & AUDIO_DEVICE_IN_BUILTIN_MIC) {
@@ -651,6 +667,8 @@ audio_devices_t Engine::getDeviceForInputSource(audio_source_t inputSource) cons
             device = AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET;
         } else if (availableDeviceTypes & AUDIO_DEVICE_IN_WIRED_HEADSET) {
             device = AUDIO_DEVICE_IN_WIRED_HEADSET;
+        } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_HEADSET) {
+            device = AUDIO_DEVICE_IN_USB_HEADSET;
         } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_DEVICE) {
             device = AUDIO_DEVICE_IN_USB_DEVICE;
         } else if (availableDeviceTypes & AUDIO_DEVICE_IN_BUILTIN_MIC) {

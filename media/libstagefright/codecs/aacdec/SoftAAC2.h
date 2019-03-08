@@ -17,7 +17,7 @@
 #ifndef SOFT_AAC_2_H_
 #define SOFT_AAC_2_H_
 
-#include "SimpleSoftOMXComponent.h"
+#include <media/stagefright/omx/SimpleSoftOMXComponent.h>
 
 #include "aacdecoder_lib.h"
 #include "DrcPresModeWrap.h"
@@ -59,8 +59,6 @@ private:
     size_t mOutputBufferCount;
     bool mSignalledError;
     OMX_BUFFERHEADERTYPE *mLastInHeader;
-    int64_t mLastHeaderTimeUs;
-    int64_t mNextOutBufferTimeUs;
     Vector<int32_t> mBufferSizes;
     Vector<int32_t> mDecodedSizes;
     Vector<int64_t> mBufferTimestamps;
@@ -91,7 +89,6 @@ private:
     int32_t outputDelayRingBufferGetSamples(INT_PCM *samples, int numSamples);
     int32_t outputDelayRingBufferSamplesAvailable();
     int32_t outputDelayRingBufferSpaceLeft();
-    void updateTimeStamp(int64_t inHeaderTimesUs);
 
     DISALLOW_EVIL_CONSTRUCTORS(SoftAAC2);
 };
