@@ -22,6 +22,10 @@ LOCAL_SHARED_LIBRARIES := \
         libbinder \
         libicuuc \
         android.hardware.media.omx@1.0 \
+        libcamera_metadata \
+	libcamera_client \
+	libcameraservice \
+	libmedia \
 
 LOCAL_STATIC_LIBRARIES := \
         libicuandroid_utils \
@@ -30,6 +34,7 @@ LOCAL_STATIC_LIBRARIES := \
 LOCAL_C_INCLUDES := \
         frameworks/av/media/libmediaplayerservice \
         frameworks/av/services/mediaresourcemanager \
+        frameworks/av/services/camera/libcameraservice \
 
 LOCAL_MODULE:= mediaserver
 LOCAL_32_BIT_ONLY := true

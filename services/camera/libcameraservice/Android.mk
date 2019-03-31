@@ -70,6 +70,7 @@ LOCAL_SHARED_LIBRARIES:= \
     libfmq \
     libgui \
     libhardware \
+    libsync \
     libhidlbase \
     libhidltransport \
     libjpeg \
