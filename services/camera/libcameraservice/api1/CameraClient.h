@@ -181,6 +181,19 @@ private:
 
     bool                 mLongshotEnabled;
     int                  mBurstCnt;
+    
+//!++
+private:
+    void                handleMtkExtNotify(int32_t ext1, int32_t ext2);
+    void                handleMtkExtData(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+    //
+    void                handleMtkExtContinuousEnd(int32_t ext1, int32_t ext2);
+    //
+    void                handleMtkExtCaptureDone(int32_t ext1, int32_t ext2);
+    void                handleMtkExtShutter(int32_t ext1, int32_t ext2);
+    void                handleMtkExtDataCompressedImage(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+//!--
+
 };
 
 }
