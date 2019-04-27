@@ -97,6 +97,19 @@ LOCAL_EXPORT_C_INCLUDE_DIRS := \
 
 LOCAL_CFLAGS += -Wall -Wextra -Werror
 
+#//!++
+# for Mtk debug level use
+ifeq ($(TARGET_BUILD_VARIANT),user)
+LOCAL_CFLAGS += -DMTKCAM_TARGET_BUILD_USER="yes"
+endif
+
+LOCAL_SRC_FILES += mediatek/CameraService.cpp
+LOCAL_SRC_FILES += mediatek/api1/CameraClient.cpp
+LOCAL_SRC_FILES += mediatek/common/CameraProviderManager.cpp
+LOCAL_SHARED_LIBRARIES += vendor.mediatek.hardware.camera.device@1.1
+LOCAL_EXPORT_SHARED_LIBRARY_HEADERS += vendor.mediatek.hardware.camera.device@1.1
+#//!--
+
 # Workaround for invalid unused-lambda-capture warning http://b/38349491
 LOCAL_CLANG_CFLAGS += -Wno-error=unused-lambda-capture
 

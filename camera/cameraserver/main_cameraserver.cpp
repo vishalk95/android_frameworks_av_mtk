@@ -26,8 +26,15 @@ int main(int argc __unused, char** argv __unused)
 {
     signal(SIGPIPE, SIG_IGN);
 
+    //!++
+    #if 0
     // Set 3 threads for HIDL calls
     hardware::configureRpcThreadpool(3, /*willjoin*/ false);
+    #else
+    // Set 6 threads for HIDL calls, features need more threads to handle preview+capture
+    hardware::configureRpcThreadpool(6, /*willjoin*/ false);
+    #endif
+    //!--
 
     sp<ProcessState> proc(ProcessState::self());
     sp<IServiceManager> sm = defaultServiceManager();

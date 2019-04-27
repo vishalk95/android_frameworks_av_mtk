@@ -231,6 +231,11 @@ public:
     metadata_vendor_id_t getProviderTagIdLocked(const std::string& id,
             hardware::hidl_version minVersion = hardware::hidl_version{0,0},
             hardware::hidl_version maxVersion = hardware::hidl_version{1000,0}) const;
+//!++
+public:
+    status_t getProperty(String8 const& key, String8& value);
+    status_t setProperty(String8 const& key, String8 const& value);
+//!--
 
 private:
     // All private members, unless otherwise noted, expect mInterfaceMutex to be locked before use

@@ -162,6 +162,18 @@ public:
                                    Parcel* reply, uint32_t flags);
 
     virtual status_t    dump(int fd, const Vector<String16>& args);
+    
+//!++
+    virtual binder::Status    setProperty(
+                                   const String16& key,
+                                   const String16& value
+                              );
+
+    virtual binder::Status    getProperty(
+                                  const String16& key,
+                                  String16* value /*out*/
+                              );
+//!--
 
     /////////////////////////////////////////////////////////////////////
     // Client functionality
@@ -174,6 +186,12 @@ public:
     };
 
     void                loadSound();
+    //!++
+    void                loadSoundImp();
+    bool                waitloadSoundDone();
+    static void*        loadSoundThread(void* arg);
+    pthread_t           mloadSoundTThreadHandle;
+    //!--
     void                playSound(sound_kind kind);
     void                releaseSound();
 
