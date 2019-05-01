@@ -38,6 +38,7 @@ cc_library_shared {
         "api1/client2/JpegCompressor.cpp",
         "api1/client2/CaptureSequencer.cpp",
         "api1/client2/ZslProcessor.cpp",
+        "api1/StreamImgBuf.cpp",
         "api2/CameraDeviceClient.cpp",
         "api2/CompositeStream.cpp",
         "api2/DepthCompositeStream.cpp",
@@ -119,7 +120,12 @@ cc_library_shared {
 
     include_dirs: [
         "system/media/private/camera/include",
+        "system/media/camera/include",
         "frameworks/native/include/media/openmax",
+        "frameworks/native/libs/nativewindow/include",
+        "frameworks/native/libs/nativewindow/include",
+        "frameworks/native/libs/nativebase/include",
+        "frameworks/native/libs/arect/include",
         "frameworks/av/media/ndk",
         "external/dynamic_depth/includes",
         "external/dynamic_depth/internal",
@@ -130,7 +136,6 @@ cc_library_shared {
     cflags: [
         "-Wall",
         "-Wextra",
-        "-Werror",
         "-Wno-ignored-qualifiers",
         "-DMTK_HARDWARE",
     ],
