@@ -1013,7 +1013,6 @@ void CameraClient::handleCallbackTimestampBatch(
 void CameraClient::handleMtkShutter(int32_t ext2) {
     if (mPlayShutterSound && (ext2 == 1)) {
         sCameraService->playSound(CameraService::SOUND_SHUTTER);
-
     }
 
     sp<hardware::ICameraClient> c = mRemoteCallback;

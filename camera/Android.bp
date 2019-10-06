@@ -72,7 +72,6 @@ cc_library_shared {
         "-Werror",
         "-Wall",
         "-Wextra",
-        "-DMTK_HARDWARE",
     ],
 
 }
