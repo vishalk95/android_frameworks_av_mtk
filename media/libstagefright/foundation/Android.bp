@@ -42,6 +42,7 @@ cc_defaults {
         "-Wno-multichar",
         "-Werror",
         "-Wall",
+        "-DMTK_HARDWARE",
     ],
 
     shared_libs: [
