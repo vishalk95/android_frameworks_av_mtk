@@ -226,7 +226,11 @@ void Camera::stopRecording()
 // release a recording frame
 void Camera::releaseRecordingFrame(const sp<IMemory>& mem)
 {
+#ifdef MTK_HARDWARE
+    ALOGD("RRF");
+#else
     ALOGV("releaseRecordingFrame");
+#endif
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return;
     c->releaseRecordingFrame(mem);

@@ -31,7 +31,7 @@ nanosleep: 1
 
 # for FileSource
 readlinkat: 1
-_llseek: 1
+# _llseek: 1
 
 # for attaching to debuggerd on process crash
 tgkill: 1

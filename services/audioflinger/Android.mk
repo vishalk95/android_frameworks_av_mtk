@@ -76,6 +76,10 @@ LOCAL_SRC_FILES += \
     FastThreadDumpState.cpp  \
     FastThreadState.cpp
 
+ifeq ($(BOARD_USES_MTK_HARDWARE),true)
+LOCAL_CFLAGS += -DMTK_HARDWARE
+endif
+
 LOCAL_CFLAGS += -DSTATE_QUEUE_INSTANTIATIONS='"StateQueueInstantiations.cpp"'
 
 LOCAL_CFLAGS += -fvisibility=hidden

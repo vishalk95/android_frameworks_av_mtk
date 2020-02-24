@@ -246,7 +246,8 @@ void Camera2ClientBase<TClientBase>::notifyError(
 
 template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyIdle() {
-    if (mDeviceActive) {
+	
+    if (mDeviceActive && TClientBase::mCameraIdStr != NULL && TClientBase::mClientPackageName != NULL) {
         getCameraService()->updateProxyDeviceState(
             hardware::ICameraServiceProxy::CAMERA_STATE_IDLE, TClientBase::mCameraIdStr,
             TClientBase::mCameraFacing, TClientBase::mClientPackageName);

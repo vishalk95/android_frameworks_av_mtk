@@ -48,15 +48,15 @@
 #include <hardware/camera.h>
 #include <system/camera.h>
 //
-#include <cutils/log.h>
-#include <common.h>
-#include <utils/common.h>
+#include <log/log.h>
+#include "common.h"
+#include <cutils/atomic.h>
 
-#include <v1/camutils/CamInfo.h>
-#include <v1/camutils/IBuffer.h>
-#include <v1/camutils/ICameraBuffer.h>
-#include <v1/camutils/IImgBufQueue.h>
-#include <v1/camutils/ImgBufQueue.h>
+#include "CamInfo.h"
+#include "IBuffer.h"
+#include "ICameraBuffer.h"
+#include "IImgBufQueue.h"
+#include "ImgBufQueue.h"
 
 using namespace android::MtkCamUtils;
 

@@ -87,6 +87,18 @@ cc_library_shared {
             uses_qcom_bsp_legacy: {
                 cppflags: ["-DQCOM_BSP_LEGACY"],
             },
+            uses_media_extensions: {
+            cflags: ["-DUSES_MEDIA_EXTENSIONS"],
+			},
+			has_legacy_camera_hal1: {
+				cflags: ["-DHAS_LEGACY_CAMERA_HAL1"],
+			},
+			uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
+            },
+            uses_legacy_mtk_av_blob: {
+             cppflags: ["-DUSE_LEGACY_MTK_AV_BLOB"],
+            },
         },
     },
 
@@ -125,6 +137,30 @@ cc_library_shared {
     export_shared_lib_headers: [
         "libmedia_omx",
     ],
+    
+    product_variables: {
+        lineage: {
+            needs_legacy_camera_hal1_dyn_native_handle: {
+                cppflags: ["-DNEEDS_LEGACY_CAMERA_HAL1_DYN_NATIVE_HANDLE"],
+            },
+            uses_qcom_bsp_legacy: {
+                cppflags: ["-DQCOM_BSP_LEGACY"],
+            },
+            uses_media_extensions: {
+            cflags: ["-DUSES_MEDIA_EXTENSIONS"],
+			},
+			has_legacy_camera_hal1: {
+				cflags: ["-DHAS_LEGACY_CAMERA_HAL1"],
+			},
+			uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
+            },
+            uses_legacy_mtk_av_blob: {
+             cppflags: ["-DUSE_LEGACY_MTK_AV_BLOB"],
+            },
+        },
+    },
+    
     sanitize: {
         misc_undefined: [
             "signed-integer-overflow",

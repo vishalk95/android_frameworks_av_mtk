@@ -48,6 +48,8 @@
 #include <memory>
 #include <utility>
 
+
+
 namespace android {
 
 extern volatile int32_t gLogLevel;
@@ -88,6 +90,11 @@ public:
 
     // Implementation of BinderService<T>
     static char const* getServiceName() { return "media.camera"; }
+
+#ifdef MTK_HARDWARE
+    virtual status_t    getProperty(String8 const& key, String8& value) const;
+    virtual status_t    setProperty(String8 const& key, String8 const& value);
+#endif
 
                         CameraService();
     virtual             ~CameraService();
@@ -677,6 +684,11 @@ private:
     sp<MediaPlayer>     mSoundPlayer[NUM_SOUNDS];
     int                 mSoundRef;  // reference count (release all MediaPlayer when 0)
 
+#ifdef MTK_HARDWARE    
+    camera_module_t     *mModule;
+    //sp<camera_module> mModule;
+    //sp<::android::hardware::ICamera> mModule;
+#endif
     // Basic flag on whether the camera subsystem is in a usable state
     bool                mInitialized;
 

@@ -73,16 +73,24 @@ cc_library_shared {
         "VendorTagDescriptor.cpp",
     ],
 
+    
+    // whole_static_libs: ["libcamera_client_mtk"],
+    
     product_variables: {
         lineage: {
+
             uses_generic_camera_parameter_library: {
                 srcs: [
-                    "CameraParameters.cpp",
+                    "CameraParameters.cpp", 
                 ],
+            },
+
+            uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
             },
         },
     },
-    defaults: ["camera_parameters_defaults"],
+  defaults: ["camera_parameters_defaults"], 
 
     shared_libs: [
         "libcutils",
@@ -92,7 +100,10 @@ cc_library_shared {
         "libgui",
         "libcamera_metadata",
         "libnativewindow",
+//        "libmtkcamera_client",
     ],
+    
+
 
     include_dirs: [
         "system/media/private/camera/include",
@@ -108,6 +119,7 @@ cc_library_shared {
         "-Werror",
         "-Wall",
         "-Wextra",
+        "-Wno-format",
     ],
 
 }

@@ -27,10 +27,6 @@
 
 namespace android {
 
-AudioPolicyMix::AudioPolicyMix(const AudioMix &mix) : AudioMix(mix)
-{
-}
-
 void AudioPolicyMix::setOutput(sp<SwAudioOutputDescriptor> &output)
 {
     mOutput = output;
@@ -46,6 +42,16 @@ void AudioPolicyMix::clearOutput()
     mOutput.clear();
 }
 
+void AudioPolicyMix::setMix(AudioMix &mix)
+{
+    mMix = mix;
+}
+
+android::AudioMix *AudioPolicyMix::getMix()
+{
+    return &mMix;
+}
+
 status_t AudioPolicyMix::dump(int fd, int spaces, int index) const
 {
     const size_t SIZE = 256;
@@ -55,25 +61,25 @@ status_t AudioPolicyMix::dump(int fd, int spaces, int index) const
     snprintf(buffer, SIZE, "%*sAudio Policy Mix %d:\n", spaces, "", index+1);
     result.append(buffer);
     std::string mixTypeLiteral;
-    if (!MixTypeConverter::toString(mMixType, mixTypeLiteral)) {
-        ALOGE("%s: failed to convert mix type %d", __FUNCTION__, mMixType);
+    if (!MixTypeConverter::toString(mMix.mMixType, mixTypeLiteral)) {
+        ALOGE("%s: failed to convert mix type %d", __FUNCTION__, mMix.mMixType);
         return BAD_VALUE;
     }
     snprintf(buffer, SIZE, "%*s- mix type: %s\n", spaces, "", mixTypeLiteral.c_str());
     result.append(buffer);
     std::string routeFlagLiteral;
-    RouteFlagTypeConverter::maskToString(mRouteFlags, routeFlagLiteral);
+    RouteFlagTypeConverter::maskToString(mMix.mRouteFlags, routeFlagLiteral);
     snprintf(buffer, SIZE, "%*s- Route Flags: %s\n", spaces, "", routeFlagLiteral.c_str());
     result.append(buffer);
     std::string deviceLiteral;
-    deviceToString(mDeviceType, deviceLiteral);
+    deviceToString(mMix.mDeviceType, deviceLiteral);
     snprintf(buffer, SIZE, "%*s- device type: %s\n", spaces, "", deviceLiteral.c_str());
     result.append(buffer);
-    snprintf(buffer, SIZE, "%*s- device address: %s\n", spaces, "", mDeviceAddress.string());
+    snprintf(buffer, SIZE, "%*s- device address: %s\n", spaces, "", mMix.mDeviceAddress.string());
     result.append(buffer);
 
     int indexCriterion = 0;
-    for (const auto &criterion : mCriteria) {
+    for (const auto &criterion : mMix.mCriteria) {
         snprintf(buffer, SIZE, "%*s- Criterion %d:\n", spaces + 2, "", indexCriterion++);
         result.append(buffer);
         std::string usageLiteral;
@@ -83,7 +89,7 @@ status_t AudioPolicyMix::dump(int fd, int spaces, int index) const
         }
         snprintf(buffer, SIZE, "%*s- Usage:%s\n", spaces + 4, "", usageLiteral.c_str());
         result.append(buffer);
-        if (mMixType == MIX_TYPE_RECORDERS) {
+        if (mMix.mMixType == MIX_TYPE_RECORDERS) {
             std::string sourceLiteral;
             if (!SourceTypeConverter::toString(criterion.mValue.mSource, sourceLiteral)) {
                 ALOGE("%s: failed to convert source %d", __FUNCTION__, criterion.mValue.mSource);
@@ -114,11 +120,12 @@ status_t AudioPolicyMixCollection::registerMix(const String8& address, AudioMix 
         ALOGE("registerPolicyMixes(): mix for address %s already registered", address.string());
         return BAD_VALUE;
     }
-    sp<AudioPolicyMix> policyMix = new AudioPolicyMix(mix);
+    sp<AudioPolicyMix> policyMix = new AudioPolicyMix();
+    policyMix->setMix(mix);
     add(address, policyMix);
 
     if (desc != 0) {
-        desc->mPolicyMix = policyMix;
+        desc->mPolicyMix = policyMix->getMix();
         policyMix->setOutput(desc);
     }
     return NO_ERROR;
@@ -164,7 +171,8 @@ status_t AudioPolicyMixCollection::getOutputForAttr(audio_attributes_t attribute
     ALOGV("getOutputForAttr() querying %zu mixes:", size());
     desc = 0;
     for (size_t i = 0; i < size(); i++) {
-        sp<AudioPolicyMix> mix = valueAt(i);
+        sp<AudioPolicyMix> policyMix = valueAt(i);
+        AudioMix *mix = policyMix->getMix();
 
         if (mix->mMixType == MIX_TYPE_PLAYERS) {
             // TODO if adding more player rules (currently only 2), make rule handling "generic"
@@ -261,7 +269,7 @@ status_t AudioPolicyMixCollection::getOutputForAttr(audio_attributes_t attribute
                       (hasUidExcludeRules && uidExclusionFound) ||
                       (hasUidMatchRules && !uidMatchFound))) {
                 ALOGV("\tgetOutputForAttr will use mix %zu", i);
-                desc = mix->getOutput();
+                desc = policyMix->getOutput();
             }
 
         } else if (mix->mMixType == MIX_TYPE_RECORDERS) {
@@ -270,7 +278,7 @@ status_t AudioPolicyMixCollection::getOutputForAttr(audio_attributes_t attribute
                     strncmp(attributes.tags + strlen("addr="),
                             mix->mDeviceAddress.string(),
                             AUDIO_ATTRIBUTES_TAGS_MAX_SIZE - strlen("addr=") - 1) == 0) {
-                desc = mix->getOutput();
+                desc = policyMix->getOutput();
             }
         }
         if (desc != 0) {
@@ -281,13 +289,12 @@ status_t AudioPolicyMixCollection::getOutputForAttr(audio_attributes_t attribute
     return BAD_VALUE;
 }
 
-audio_devices_t AudioPolicyMixCollection::getDeviceAndMixForInputSource(
-        audio_source_t inputSource,
-        audio_devices_t availDevices,
-        sp<AudioPolicyMix> *policyMix)
+audio_devices_t AudioPolicyMixCollection::getDeviceAndMixForInputSource(audio_source_t inputSource,
+                                                                        audio_devices_t availDevices,
+                                                                        AudioMix **policyMix)
 {
     for (size_t i = 0; i < size(); i++) {
-        AudioPolicyMix *mix = valueAt(i).get();
+        AudioMix *mix = valueAt(i)->getMix();
 
         if (mix->mMixType != MIX_TYPE_RECORDERS) {
             continue;
@@ -310,8 +317,7 @@ audio_devices_t AudioPolicyMixCollection::getDeviceAndMixForInputSource(
     return AUDIO_DEVICE_NONE;
 }
 
-status_t AudioPolicyMixCollection::getInputMixForAttr(
-        audio_attributes_t attr, sp<AudioPolicyMix> *policyMix)
+status_t AudioPolicyMixCollection::getInputMixForAttr(audio_attributes_t attr, AudioMix **policyMix)
 {
     if (strncmp(attr.tags, "addr=", strlen("addr=")) != 0) {
         return BAD_VALUE;
@@ -321,7 +327,8 @@ status_t AudioPolicyMixCollection::getInputMixForAttr(
 #ifdef LOG_NDEBUG
     ALOGV("getInputMixForAttr looking for address %s\n  mixes available:", address.string());
     for (size_t i = 0; i < size(); i++) {
-            sp<AudioPolicyMix> mix = valueAt(i);
+            sp<AudioPolicyMix> policyMix = valueAt(i);
+            AudioMix *mix = policyMix->getMix();
             ALOGV("\tmix %zu address=%s", i, mix->mDeviceAddress.string());
     }
 #endif
@@ -332,14 +339,13 @@ status_t AudioPolicyMixCollection::getInputMixForAttr(
         return BAD_VALUE;
     }
     sp<AudioPolicyMix> audioPolicyMix = valueAt(index);
+    AudioMix *mix = audioPolicyMix->getMix();
 
-    if (audioPolicyMix->mMixType != MIX_TYPE_PLAYERS) {
+    if (mix->mMixType != MIX_TYPE_PLAYERS) {
         ALOGW("getInputMixForAttr() bad policy mix type for address %s", address.string());
         return BAD_VALUE;
     }
-    if (policyMix != nullptr) {
-        *policyMix = audioPolicyMix;
-    }
+    *policyMix = mix;
     return NO_ERROR;
 }
 

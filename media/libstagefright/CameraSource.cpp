@@ -134,13 +134,33 @@ static int32_t getColorFormat(const char* colorFormat) {
         return -1;
     }
 
+#ifdef MTK_HARDWARE
+    ALOGD("getColorFormat(%s)", colorFormat);
+
+    if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV420P)) {
+        // YV12
+        return OMX_MTK_COLOR_FormatYV12;
+    }
+
+    if (!strcmp(colorFormat, "yuv420i-yyuvyy-3plane" /*MtkCameraParameters::PIXEL_FORMAT_YUV420I)*/)) {
+        // i420
+        return OMX_COLOR_FormatYUV420Planar;
+    }
+#else
     if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV420P)) {
        return OMX_COLOR_FormatYUV420Planar;
     }
+#endif
 
     if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV422SP)) {
        return OMX_COLOR_FormatYUV422SemiPlanar;
     }
+
+#ifdef MTK_HARDWARE
+    if (!strcmp(colorFormat, "bitstream")) {
+       return OMX_COLOR_FormatYUV420Planar;
+    }
+#endif
 
     if (!strcmp(colorFormat, CameraParameters::PIXEL_FORMAT_YUV420SP)) {
         return OMX_COLOR_FormatYUV420SemiPlanar;
@@ -656,6 +676,17 @@ status_t CameraSource::initWithCameraAccess(
         return err;
     }
 
+    const char* supportedFrameRates =
+            params.get(CameraParameters::KEY_SUPPORTED_PREVIEW_FRAME_RATES);
+    CHECK(supportedFrameRates != NULL);
+    char buffer[4];
+    snprintf(buffer, 4, "%d", frameRate);
+    if (!strstr(supportedFrameRates, buffer)) {
+        frameRate = atoi(supportedFrameRates);
+    } else {
+        frameRate = params.getPreviewFrameRate();
+    }
+
     // Set the camera to use the requested video frame size
     // and/or frame rate.
     if ((err = configureCamera(&params,
@@ -762,15 +793,7 @@ status_t CameraSource::startCameraRecording() {
             }
         }
 
-        err = mCamera->sendCommand(
-            CAMERA_CMD_SET_VIDEO_FORMAT, mEncoderFormat, mEncoderDataSpace);
 
-        // This could happen for CameraHAL1 clients; thus the failure is
-        // not a fatal error
-        if (err != OK) {
-            ALOGW("Failed to set video encoder format/dataspace to %d, %d due to %d",
-                    mEncoderFormat, mEncoderDataSpace, err);
-        }
 
         // Create memory heap to store buffers as VideoNativeMetadata.
         createVideoBufferMemoryHeap(sizeof(VideoNativeHandleMetadata), kDefaultVideoBufferCount);
@@ -1413,7 +1436,9 @@ void CameraSource::processBufferQueueFrame(BufferItem& buffer) {
 
 MetadataBufferType CameraSource::metaDataStoredInVideoBuffers() const {
     ALOGV("metaDataStoredInVideoBuffers");
-
+#ifdef CAMCORDER_GRALLOC_SOURCE
+    return kMetadataBufferTypeGrallocSource;
+#endif
     // Output buffers will contain metadata if camera sends us buffer in metadata mode or via
     // buffer queue.
     switch (mVideoBufferMode) {

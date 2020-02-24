@@ -39,11 +39,12 @@
 //
 #include "StreamImgBuf.h"
 #include "Format.h"
+#include "IImageBuffer.h"
 using namespace android;
 using namespace NSDisplayClient;
 using namespace NSCam::Utils;
 //
-#include "log/log.h"
+#include <log/log.h>
 #include "system/graphics.h"
 //
 /******************************************************************************
@@ -55,7 +56,7 @@ using namespace NSCam::Utils;
 #define MY_LOGW(fmt, arg...)        ALOGW("[%s] " fmt, __FUNCTION__, ##arg)
 #define MY_LOGE(fmt, arg...)        ALOGE("[%s] " fmt, __FUNCTION__, ##arg)
 #define MY_LOGA(fmt, arg...)        ALOGA("[%s] " fmt, __FUNCTION__, ##arg)
-#define MY_LOGF(fmt, arg...)        ALOGF("[%s] " fmt, __FUNCTION__, ##arg)
+#define MY_LOGF(fmt, arg...)        ALOGE("[%s] " fmt, __FUNCTION__, ##arg)
 //
 #define MY_LOGV_IF(cond, ...)       do { if ( (cond) ) { MY_LOGV(__VA_ARGS__); } }while(0)
 #define MY_LOGD_IF(cond, ...)       do { if ( (cond) ) { MY_LOGD(__VA_ARGS__); } }while(0)
@@ -65,6 +66,7 @@ using namespace NSCam::Utils;
 #define MY_LOGA_IF(cond, ...)       do { if ( (cond) ) { MY_LOGA(__VA_ARGS__); } }while(0)
 #define MY_LOGF_IF(cond, ...)       do { if ( (cond) ) { MY_LOGF(__VA_ARGS__); } }while(0)
 //
+
 #define GET_IIMGBUF_IMG_STRIDE_IN_BYTE_FOR_DISPLAY_ROTATION(pImgInfo, plane)  \
             ((Format::queryPlaneCount(Format::queryImageFormat(pImgInfo->ms8ImgFormat)) >= (plane+1)) ? \
             ((getImgWidthStride(plane+3)*Format::queryPlaneBitsPerPixel(Format::queryImageFormat(pImgInfo->ms8ImgFormat),plane)))>>3 : 0)
@@ -72,6 +74,7 @@ using namespace NSCam::Utils;
 #define GET_IIMGBUF_IMG_STRIDE_IN_BYTE(pImgInfo, plane)   \
             ((Format::queryPlaneCount(Format::queryImageFormat(pImgInfo->ms8ImgFormat)) >= (plane+1)) ? \
             ((getImgWidthStride(plane)*Format::queryPlaneBitsPerPixel(Format::queryImageFormat(pImgInfo->ms8ImgFormat),plane)))>>3 : 0)
+
 
 /******************************************************************************
  *
@@ -82,8 +85,7 @@ ImgInfo(
     uint32_t const u4ImgHeight,
     char const*const ImgFormat,
     int32_t const i4ImgFormat,
-    char const*const pImgName,
-    uint32_t const u4Orientation
+    char const*const pImgName
 )
     : ms8ImgName(pImgName)
     , ms8ImgFormat(ImgFormat)
@@ -91,7 +93,6 @@ ImgInfo(
     , mu4ImgWidth(u4ImgWidth)
     , mu4ImgHeight(u4ImgHeight)
     , mu4BitsPerPixel(Format::queryImageBitsPerPixel(i4ImgFormat))
-    , mi4Orientation(u4Orientation)
 {
     ALOGD(
         "[%s](%s@%dx%d@%d-bit)",
@@ -122,34 +123,34 @@ StreamImgBuf(
     , mpANWBuffer(0)
     , mi4Stride(i4Stride)
     , mBufSize(0)
-    , mbNeedRotation(false)
 {
-/*
+	/*
 #ifndef container_of
 #define container_of(ptr, type, member) \
     (type *)((char*)(ptr) - offsetof(type, member))
 #endif
-    mpANWBuffer = container_of(pBufHndl, ANativeWindowBuffer, handle);
-    MY_LOGE_IF(mpANWBuffer->stride != (int)getImgWidthStride(0),"mismatch stride: %d %d", mpANWBuffer->stride, mi4Stride);
-    MY_LOGE_IF(mpANWBuffer->width  != (int)getImgWidth(),       "mismatch width: %d %d", mpANWBuffer->width, getImgWidth());
-    MY_LOGE_IF(mpANWBuffer->height != (int)getImgHeight(),      "mismatch height: %d %d", mpANWBuffer->height, getImgHeight());
-*/
-#if 1
 
-    if(rpImgInfo->mi4Orientation & HAL_TRANSFORM_ROT_90)    //It also included rot 270 case, because rot 270 = rot90|flipH|flipV )
-    {
-        //If rotated, the fromat must be YUYV
-        //For (Rotated) YUYV Format
-        mBufSize =  getImgWidth() * (GET_IIMGBUF_IMG_STRIDE_IN_BYTE_FOR_DISPLAY_ROTATION(rpImgInfo,0));
-    }
-    else
-    {
-        //If not rotated, the fromat must be YV12
-        //For YV12 Format
-        size_t const y_size = getImgHeight() * (GET_IIMGBUF_IMG_STRIDE_IN_BYTE(rpImgInfo,0));
-        size_t const vu_size= (getImgHeight()>>1) * ((GET_IIMGBUF_IMG_STRIDE_IN_BYTE(rpImgInfo,1)) + (GET_IIMGBUF_IMG_STRIDE_IN_BYTE(rpImgInfo,2)));
-        mBufSize = y_size + vu_size;
-    }
+    mpANWBuffer = container_of(pBufHndl, ANativeWindowBuffer, handle);
+    
+    MY_LOGW_IF(mpANWBuffer->stride != (int)getImgWidthStride(0),"mismatch stride: %d %d", mpANWBuffer->stride, mi4Stride);
+    MY_LOGW_IF(mpANWBuffer->width  != (int)getImgWidth(),       "mismatch width: %d %d", mpANWBuffer->width, getImgWidth());
+    MY_LOGW_IF(mpANWBuffer->height != (int)getImgHeight(),      "mismatch height: %d %d", mpANWBuffer->height, getImgHeight());
+*/
+
+#if 0
+
+mBufSize =  getImgWidth() * (GET_IIMGBUF_IMG_STRIDE_IN_BYTE_FOR_DISPLAY_ROTATION(rpImgInfo,0));
+
+#endif
+
+
+//mBufSize = 0;
+
+#if 1
+    size_t const y_size = getImgHeight() * (getImgWidthStride(0));
+    size_t const vu_size= (getImgHeight()>>1) * (getImgWidthStride(1) + getImgWidthStride(2));
+    size_t const bufSize = y_size + vu_size;
+    mBufSize = bufSize;
 #endif
 #if 0
     dump();
@@ -180,19 +181,10 @@ uint32_t
 StreamImgBuf::
 getImgWidthStride(uint_t const uPlaneIndex) const
 {
-    if(mpImgInfo->mi4Orientation == 0 || uPlaneIndex <= 2)
-    {
-        return  (0 == uPlaneIndex)
-            ?   mi4Stride
-            :   ((~15) & (15 + (mi4Stride>>1)))
-                ;
-    }
-    else
-    {
-        int stride = mi4Stride;
-
-        return ((3 == uPlaneIndex) ? stride : 0);
-    }
+    return  (0 == uPlaneIndex)
+        ?   mi4Stride
+        :   ((~15) & (15 + (mi4Stride>>1)))
+            ;
 }
 
 
@@ -206,39 +198,11 @@ dump() const
     MY_LOGD(
         "[%s](%s@%dx%d@%d-bit@%d), ion:%d, pBuf/pBufHndl=%p/%p/%p, Stride:%d, Timestamp:%lld",
         getBufName(), getImgFormat().string(), getImgWidth(), getImgHeight(),
-        getBitsPerPixel(), getBufSize(),
+        getBitsPerPixel(), (int) getBufSize(),
         mfdIon,
-        mpBufBase, mpBufHndl, *mpBufHndl, mi4Stride, mi8Timestamp
+        mpBufBase, mpBufHndl, *mpBufHndl, mi4Stride, (long long) mi8Timestamp
     );
 }
 
 
-/******************************************************************************
- *
- ******************************************************************************/
-uint32_t
-StreamImgBuf::
-getOrientation()
-{
-    return mpImgInfo->mi4Orientation;
-}
 
-/******************************************************************************
- *
- ******************************************************************************/
-void
-StreamImgBuf::
-setNeedDisplayRotation(bool bNeed)
-{
-    mbNeedRotation = bNeed;
-}
-
-/******************************************************************************
- *
- ******************************************************************************/
-bool
-StreamImgBuf::
-getNeedDisplayRotation()
-{
-    return mbNeedRotation;
-}

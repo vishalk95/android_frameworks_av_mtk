@@ -21,6 +21,7 @@ namespace android {
 extern pid_t getpid_cached;
 bool isTrustedCallingUid(uid_t uid);
 bool recordingAllowed(const String16& opPackageName, pid_t pid, uid_t uid);
+bool accessFmRadioAllowed();
 bool captureAudioOutputAllowed(pid_t pid, uid_t uid);
 bool captureHotwordAllowed(pid_t pid, uid_t uid);
 bool settingsAllowed();

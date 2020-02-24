@@ -32,6 +32,13 @@
 #include "TestPlayerStub.h"
 #include "nuplayer/NuPlayerDriver.h"
 
+//#pragma clang diagnostic push
+//#pragma clang diagnostic ignored "-Woverloaded-virtual"
+
+#ifdef MTK_HARDWARE1
+#include "FMAudioPlayer.h"
+#endif
+
 namespace android {
 
 Mutex MediaPlayerFactory::sLock;
@@ -126,7 +133,8 @@ player_type MediaPlayerFactory::getPlayerType(const sp<IMediaPlayer>& client,
 
 sp<MediaPlayerBase> MediaPlayerFactory::createPlayer(
         player_type playerType,
-        const sp<MediaPlayerBase::Listener> &listener,
+        const wp<IMediaPlayer> &client,
+        notify_callback_f notifyFunc,
         pid_t pid) {
     sp<MediaPlayerBase> p;
     IFactory* factory;
@@ -151,7 +159,7 @@ sp<MediaPlayerBase> MediaPlayerFactory::createPlayer(
 
     init_result = p->initCheck();
     if (init_result == NO_ERROR) {
-        p->setNotifyCallback(listener);
+        p->setNotifyCallback(client, notifyFunc);
     } else {
         ALOGE("Failed to create player object of type %d, initCheck failed"
               " (res = %d)", playerType, init_result);
@@ -238,6 +246,29 @@ class TestPlayerFactory : public MediaPlayerFactory::IFactory {
     }
 };
 
+#ifdef MTK_HARDWARE1
+class FMPlayerFactory : public MediaPlayerFactory::IFactory {
+  public:
+    virtual float scoreFactory(const sp<IMediaPlayer>& /*client*/,
+                               const char* url,
+                               float /*curScore*/) {
+								   
+        if(strncmp(url, "THIRDPARTY://MEDIAPLAYER_PLAYERTYPE_FM", 38) == 0){
+           return 1.0;
+		}				   
+        if(strncmp(url, "MEDIATEK://MEDIAPLAYER_PLAYERTYPE_FM", 36) == 0){
+           return 1.0;
+        }
+        return 0.0;
+    }
+
+    virtual sp<MediaPlayerBase> createPlayer(pid_t /* pid */) {
+        ALOGV("Create FM Player");
+        return new FMAudioPlayer();
+    }
+};
+#endif
+
 void MediaPlayerFactory::registerBuiltinFactories() {
     Mutex::Autolock lock_(&sLock);
 
@@ -250,7 +281,9 @@ void MediaPlayerFactory::registerBuiltinFactories() {
     factory = new TestPlayerFactory();
     if (registerFactory_l(factory, TEST_PLAYER) != OK)
         delete factory;
-
+#ifdef MTK_HARDWARE1
+    registerFactory_l(new FMPlayerFactory(), FM_AUDIO_PLAYER);
+#endif
     sInitComplete = true;
 }
 

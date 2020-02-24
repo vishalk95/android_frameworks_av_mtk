@@ -9,20 +9,31 @@ cc_library_static {
     include_dirs: [
         "frameworks/native/include/media/openmax",
         "frameworks/av/media/libstagefright/colorconversion/inc",
+        "frameworks/av/include/media/stagefright/dpframework",
     ],
+
+    product_variables: {
+        lineage: {
+            uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
+            },
+        },
+    },
 
     shared_libs: [
         "libui",
         "libnativewindow",
-        "libdpframework",
+		"libdpframework",
     ],
 
-    static_libs: ["libyuv_static"],
+    static_libs: [
+    "libyuv_static",
+    ],
 
-    cflags: ["-Werror",
-             "-DMTK_HARDWARE",
-             ],
-
+    cflags: ["-Werror"],
+	
+	// allow_undefined_symbols: true,
+	
     sanitize: {
         misc_undefined: [
             "signed-integer-overflow",

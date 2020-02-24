@@ -1,18 +1,14 @@
 // #include <MtpTypes.h>
 #include <system/audio.h>
-//#include <StrongPointer.h>
+#include <StrongPointer.h>
 #include <media/IAudioFlinger.h>
 #include <hardware/audio.h>
 #include <stdlib.h>
 #include <dlfcn.h>
 
-#ifndef __unused
-#define __unused  __attribute__((__unused__))
-#endif
-
 namespace android {
 
-//typedef void (*audio_error_callback)(status_t err);
+typedef void (*audio_error_callback)(status_t err);
 
 class AudioSystem
 {
@@ -22,7 +18,7 @@ public:
     static int SetVoiceUnlockSRC(uint outSR, uint outChannel);
     static bool stopVoiceUnlockDL();
     static bool startVoiceUnlockDL();
-    static int ReadRefFromRing(void* buf, uint32_t datasz, void* DLtime);
+    static int ReadRefFromRing(void*buf, uint32_t datasz,void* DLtime);
     static int GetVoiceUnlockULTime(void* DLtime);
     static void freeVoiceUnlockDLInstance();
 
@@ -30,7 +26,7 @@ public:
 
 bool AudioSystem::getVoiceUnlockDLInstance()
 {
-  return false;
+  return 0;
 }
 
 int AudioSystem::GetVoiceUnlockDLLatency()
@@ -45,15 +41,19 @@ int AudioSystem::SetVoiceUnlockSRC(uint outSR __unused, uint outChannel __unused
 
 bool AudioSystem::stopVoiceUnlockDL()
 {
-  return false;
+  return 0;
 }
 
 bool AudioSystem::startVoiceUnlockDL()
 {
-  return false;
+  return 0;
 }
 
-int AudioSystem::ReadRefFromRing(void* buf __unused, uint32_t datasz __unused, void* DLtime __unused)
+int AudioSystem::ReadRefFromRing(
+        void *buf __unused,
+        uint32_t datasz __unused,
+        void* DLtime __unused
+        )
 {
   return 0;
 }
@@ -63,8 +63,11 @@ int AudioSystem::GetVoiceUnlockULTime(void* DLtime __unused)
   return 0;
 }
 
-void AudioSystem::freeVoiceUnlockDLInstance() {}
-/*
+void AudioSystem::freeVoiceUnlockDLInstance()
+{
+  return;
+}
+
 class IATVCtrlClient
 {
 };
@@ -211,6 +214,7 @@ public:
     }
 };
 
-IMPLEMENT_META_INTERFACE(ATVCtrlService, "android.media.IATVCtrlService");*/
+IMPLEMENT_META_INTERFACE(ATVCtrlService, "android.media.IATVCtrlService");
 
 } // namespace
+

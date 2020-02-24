@@ -40,6 +40,7 @@ const MediaProfiles::NameToTagMap MediaProfiles::sVideoEncoderNameMap[] = {
     {"h263", VIDEO_ENCODER_H263},
     {"h264", VIDEO_ENCODER_H264},
     {"m4v",  VIDEO_ENCODER_MPEG_4_SP},
+    {"h265", VIDEO_ENCODER_H265},
     {"hevc", VIDEO_ENCODER_HEVC}
 };
 
@@ -51,7 +52,8 @@ const MediaProfiles::NameToTagMap MediaProfiles::sAudioEncoderNameMap[] = {
 #ifdef MTK_HARDWARE
     {"vorbis", AUDIO_ENCODER_VORBIS},
 #endif
-    {"aaceld", AUDIO_ENCODER_AAC_ELD}
+    {"aaceld", AUDIO_ENCODER_AAC_ELD},
+    {"lpcm",  AUDIO_ENCODER_LPCM},
 };
 
 const MediaProfiles::NameToTagMap MediaProfiles::sFileFormatMap[] = {
@@ -94,6 +96,19 @@ const MediaProfiles::NameToTagMap MediaProfiles::sCamcorderQualityNameMap[] = {
     {"highspeed720p", CAMCORDER_QUALITY_HIGH_SPEED_720P},
     {"highspeed1080p", CAMCORDER_QUALITY_HIGH_SPEED_1080P},
     {"highspeed2160p", CAMCORDER_QUALITY_HIGH_SPEED_2160P},
+
+    // Vendor-specific profiles
+    {"vga", CAMCORDER_QUALITY_VGA},
+    {"4kdci", CAMCORDER_QUALITY_4KDCI},
+    {"timelapsevga", CAMCORDER_QUALITY_TIME_LAPSE_VGA},
+    {"timelapse4kdci", CAMCORDER_QUALITY_TIME_LAPSE_4KDCI},
+    {"highspeedcif", CAMCORDER_QUALITY_HIGH_SPEED_CIF},
+    {"highspeedvga", CAMCORDER_QUALITY_HIGH_SPEED_VGA},
+    {"highspeed4kdci", CAMCORDER_QUALITY_HIGH_SPEED_4KDCI},
+    {"qhd", CAMCORDER_QUALITY_QHD},
+    {"2k", CAMCORDER_QUALITY_2k},
+    {"timelapseqhd", CAMCORDER_QUALITY_TIME_LAPSE_QHD},
+    {"timelapse2k", CAMCORDER_QUALITY_TIME_LAPSE_2k},
 
 #ifdef MTK_HARDWARE
     {"mtklow", CAMCORDER_QUALITY_MTK_LOW},
@@ -309,6 +324,9 @@ MediaProfiles::createVideoEncoderCap(const char **atts)
 
     const size_t nMappings = sizeof(sVideoEncoderNameMap)/sizeof(sVideoEncoderNameMap[0]);
     const int codec = findTagForName(sVideoEncoderNameMap, nMappings, atts[1]);
+    
+    ALOGD("createVideoEncoderCap: checking Video Codec name: %s",atts[1]);
+    
     CHECK(codec != -1);
 
     MediaProfiles::VideoEncoderCap *cap =
@@ -333,6 +351,7 @@ MediaProfiles::createAudioEncoderCap(const char **atts)
 
     const size_t nMappings = sizeof(sAudioEncoderNameMap)/sizeof(sAudioEncoderNameMap[0]);
     const int codec = findTagForName(sAudioEncoderNameMap, nMappings, atts[1]);
+    ALOGD("createAudioEncoderCap: checking Audio Codec name: %s",atts[1]);
     CHECK(codec != -1);
 
     MediaProfiles::AudioEncoderCap *cap =
@@ -473,8 +492,9 @@ MediaProfiles::startElementHandler(void *userData, const char *name, const char 
 }
 
 static bool isCamcorderProfile(camcorder_quality quality) {
-    return quality >= CAMCORDER_QUALITY_LIST_START &&
-           quality <= CAMCORDER_QUALITY_LIST_END;
+    return (quality >= CAMCORDER_QUALITY_LIST_START &&
+           quality <= CAMCORDER_QUALITY_LIST_END) || (quality >= CAMCORDER_QUALITY_VENDOR_START &&
+           quality <= CAMCORDER_QUALITY_VENDOR_END);
 }
 
 static bool isTimelapseProfile(camcorder_quality quality) {
@@ -867,6 +887,9 @@ MediaProfiles::createDefaultAmrNBEncoderCap()
         AUDIO_ENCODER_AMR_NB, 5525, 12200, 8000, 8000, 1, 1);
 }
 
+
+
+
 /*static*/ void
 MediaProfiles::createDefaultImageEncodingQualityLevels(MediaProfiles *profiles)
 {
@@ -901,6 +924,9 @@ bool MediaProfiles::checkXmlFile(const char* xmlFile) {
 /*static*/ MediaProfiles*
 MediaProfiles::createInstanceFromXmlFile(const char *xml)
 {
+	
+	ALOGD("createInstanceFromXmlFile: %s", xml);
+	
     FILE *fp = NULL;
     CHECK((fp = fopen(xml, "r")));
 

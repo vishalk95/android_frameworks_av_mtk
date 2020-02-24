@@ -115,6 +115,7 @@ private:
     void                    handleMtkGenericData(int32_t msgType, const sp<IMemory>& dataPtr,
             camera_frame_metadata_t *metadata);
 #endif
+
     void                    handleShutter(void);
     void                    handlePreviewData(int32_t msgType, const sp<IMemory>& mem,
             camera_frame_metadata_t *metadata);
@@ -183,6 +184,26 @@ private:
     // This function keeps trying to grab mLock, or give up if the message
     // is found to be disabled. It returns true if mLock is grabbed.
     bool                    lockIfMessageWanted(int32_t msgType);
+
+#ifdef MTK_HARDWARE
+        //
+        void                handleMtkExtNotify(int32_t ext1, int32_t ext2);
+        void                handleMtkExtData(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+        //
+        void                handleMtkExtBurstShutter(int32_t ext1, int32_t ext2);
+        void                handleMtkExtDataBurstShot(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+        //
+        void                handleMtkExtContinuousShutter(int32_t ext1, int32_t ext2);
+        void                handleMtkExtDataContinuousShot(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+        void                handleMtkExtContinuousEnd(int32_t ext1, int32_t ext2);
+        //
+        void                handleMtkExtCaptureDone(int32_t ext1, int32_t ext2);
+        void                handleMtkExtShutter(int32_t ext1, int32_t ext2);
+        void                handleMtkExtDataCompressedImage(const sp<IMemory>& dataPtr, camera_frame_metadata_t *metadata);
+        //
+        void                playRecordingSound();
+        //
+#endif 
 
     bool                 mLongshotEnabled;
     int                  mBurstCnt;

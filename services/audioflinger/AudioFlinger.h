@@ -109,7 +109,6 @@ class AudioFlinger :
 
 public:
     static const char* getServiceName() ANDROID_API { return "media.audio_flinger"; }
-
     virtual     status_t    dump(int fd, const Vector<String16>& args);
 
     // IAudioFlinger interface, in binder opcode order

@@ -20,6 +20,8 @@
 #include <media/hardware/HardwareAPI.h> // For VideoNativeHandleMetadata
 #include "CameraHardwareInterface.h"
 
+
+
 namespace android {
 
 using namespace hardware::camera::device::V1_0;
@@ -28,6 +30,7 @@ using hardware::hidl_handle;
 
 CameraHardwareInterface::~CameraHardwareInterface()
 {
+    
     ALOGI("Destroying camera %s", mName.string());
     if (mHidlDevice != nullptr) {
         mHidlDevice->close();
@@ -463,7 +466,19 @@ CameraHardwareInterface::setTimestamp(int64_t timestamp) {
 status_t CameraHardwareInterface::setPreviewWindow(const sp<ANativeWindow>& buf)
 {
     ALOGV("%s(%s) buf %p", __FUNCTION__, mName.string(), buf.get());
+
     if (CC_LIKELY(mHidlDevice != nullptr)) {
+/*	
+#ifdef MTK_HARDWARE	
+		if (buf == nullptr || buf == 0) {
+			ALOGD("set_preview_window(0) before mPreviewWindow = 0");
+			//mHidlDevice->setPreviewWindow(nullptr);
+			//mPreviewWindow = nullptr;
+			return OK;
+		} 
+#endif */
+		
+		
         mPreviewWindow = buf;
         if (buf != nullptr) {
             if (mPreviewScalingMode != NOT_SET) {

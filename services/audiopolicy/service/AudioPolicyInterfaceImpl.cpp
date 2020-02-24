@@ -330,6 +330,10 @@ status_t AudioPolicyService::getInputForAttr(const audio_attributes_t *attr,
         return BAD_VALUE;
     }
 
+    if ((attr->source == AUDIO_SOURCE_FM_TUNER) && !accessFmRadioAllowed()) {
+        return BAD_VALUE;
+    }
+
     sp<AudioPolicyEffects>audioPolicyEffects;
     {
         status_t status;

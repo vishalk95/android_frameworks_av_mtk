@@ -26,14 +26,17 @@
 #include "libyuv/video_common.h"
 
 #ifdef MTK_HARDWARE
+#include "OMX_IVCommon.h"
 #include <cutils/properties.h>
 #include "DpBlitStream.h"
 #include <stdio.h>
 #include <utils/Timers.h>
 #include <inttypes.h>
 
-static const int OMX_MTK_COLOR_FormatYV12 = 0x7F000200;
+//static const int OMX_MTK_COLOR_FormatYV12 = 0x7F000200;
 #endif
+
+
 
 #define USE_LIBYUV
 
@@ -55,12 +58,12 @@ bool ColorConverter::isValid() const {
 #ifdef MTK_HARDWARE
 ALOGD("***isValid() mSrcFormat=0x%x,mDstFormat=0x%x",mSrcFormat,mDstFormat);
     if ((mDstFormat != OMX_COLOR_Format16bitRGB565) &&
-	(mDstFormat != OMX_COLOR_Format32bitARGB8888)) {
+        (mDstFormat != OMX_COLOR_Format32bitARGB8888)) {
         return ERROR_UNSUPPORTED;
     }
     if ((mSrcFormat == OMX_COLOR_Format32bitARGB8888) ||
-	(mSrcFormat == OMX_MTK_COLOR_FormatYV12))
-	return true;
+        (mSrcFormat == OMX_MTK_COLOR_FormatYV12))
+        return true;
 #endif
     switch (mSrcFormat) {
         case OMX_COLOR_FormatYUV420Planar:
@@ -73,7 +76,13 @@ ALOGD("***isValid() mSrcFormat=0x%x,mDstFormat=0x%x",mSrcFormat,mDstFormat);
         case OMX_COLOR_FormatYUV420SemiPlanar:
         case OMX_TI_COLOR_FormatYUV420PackedSemiPlanar:
             return mDstFormat == OMX_COLOR_Format16bitRGB565;
-
+#ifdef MTK_HARDWARE
+        case OMX_COLOR_Format32bitARGB8888:
+        case OMX_MTK_COLOR_FormatYV12:
+        case OMX_COLOR_FormatVendorMTKYUV:
+        case OMX_COLOR_FormatVendorMTKYUV_FCM:
+            return true;
+#endif   
         default:
             return false;
     }
@@ -139,7 +148,6 @@ status_t ColorConverter::convert(
         size_t dstWidth, size_t dstHeight,
         size_t dstCropLeft, size_t dstCropTop,
         size_t dstCropRight, size_t dstCropBottom) {
-
     BitmapParams src(
             const_cast<void *>(srcBits),
             srcWidth, srcHeight,
@@ -151,11 +159,14 @@ status_t ColorConverter::convert(
             dstCropLeft, dstCropTop, dstCropRight, dstCropBottom, mDstFormat);
 
     status_t err;
-#ifdef MTK_HARDWARE
+
+#ifndef MTK_HARDWARE // disabled for Oreo!! 
     if ((mSrcFormat == OMX_COLOR_FormatYUV420Planar) ||
-	(mSrcFormat == OMX_MTK_COLOR_FormatYV12))
-	return convertYUVToRGBHW(src, dst);
+        (mSrcFormat == OMX_MTK_COLOR_FormatYV12))
+        return convertYUVToRGBHW(src, dst);
 #endif
+
+
     switch (mSrcFormat) {
         case OMX_COLOR_FormatYUV420Planar:
 #ifdef USE_LIBYUV
@@ -180,7 +191,14 @@ status_t ColorConverter::convert(
         case OMX_TI_COLOR_FormatYUV420PackedSemiPlanar:
             err = convertTIYUV420PackedSemiPlanar(src, dst);
             break;
-
+#ifndef MTK_HARDWARE // disabled for oreo!!! let it disabled!!
+        case OMX_MTK_COLOR_FormatYV12:
+        case OMX_COLOR_FormatVendorMTKYUV:
+        case OMX_COLOR_FormatVendorMTKYUV_FCM:
+        case OMX_COLOR_Format32bitARGB8888:
+        err = convertYUVToRGBHW(src, dst);
+        break;
+#endif
         default:
         {
             CHECK(!"Should not be here. Unknown color conversion.");
@@ -363,6 +381,7 @@ void ColorConverter::writeToDst(
 }
 
 #if !(defined(USE_LIBYUV) && defined(MTK_HARDWARE))
+
 status_t ColorConverter::convertYUV420Planar(
         const BitmapParams &src, const BitmapParams &dst) {
     if (!((src.mCropLeft & 1) == 0
@@ -760,7 +779,7 @@ status_t ColorConverter::convertYUVToRGBHW(const BitmapParams &src, const Bitmap
         blitStream->setSrcBuffer((void**)planar, (unsigned int*)length, 3);
         //blitStream->setSrcConfig(srcWStride, srcHStride, eYV12, eInterlace_None, &srcRoi);
         blitStream->setSrcConfig(srcWStride, srcHStride, srcWStride, (((srcWStride>>1)+0xf) & (~0xf)), eYV12, DP_PROFILE_BT601, eInterlace_None, &srcRoi);
-    }
+    } */
     else if (mSrcFormat == OMX_COLOR_FormatVendorMTKYUV) {
         char* planar[2];
         unsigned int length[2];
@@ -789,6 +808,7 @@ status_t ColorConverter::convertYUVToRGBHW(const BitmapParams &src, const Bitmap
         //blitStream->setSrcConfig(srcWStride, srcHStride, eNV12_BLK_FCM, eInterlace_None, &srcRoi);
         blitStream->setSrcConfig(srcWStride, srcHStride, srcWStride * 32, srcWStride * 16, eNV12_BLK_FCM, DP_PROFILE_BT601, eInterlace_None, &srcRoi);
     }
+    /*
     else if (mSrcFormat == OMX_COLOR_FormatVendorMTKYUV_10BIT_H) {
         char* planar[2];
         unsigned int length[2];
@@ -817,7 +837,7 @@ status_t ColorConverter::convertYUVToRGBHW(const BitmapParams &src, const Bitmap
         //blitStream->setSrcConfig(srcWStride, srcHStride, eNV12_BLK, eInterlace_None, &srcRoi);
         blitStream->setSrcConfig(srcWStride, srcHStride, srcWStride * 40, srcWStride * 20, DP_COLOR_420_BLKP_10_V, DP_PROFILE_BT601, eInterlace_None, &srcRoi);
     }
-*/
+	*/
     ALOGD("dst addr(%p), w(%d), h(%d)", dst.mBits, dstWStride, dstHStride);
     if (mDstFormat == OMX_COLOR_Format16bitRGB565) {
     blitStream->setDstBuffer(dst.mBits, dst.mWidth * dst.mHeight * 2);
@@ -838,6 +858,7 @@ status_t ColorConverter::convertYUVToRGBHW(const BitmapParams &src, const Bitmap
     bool bRet = blitStream->invalidate();
     ALOGI("blitStream return %d.", bRet);
 
+
     sprintf(name_rgb, "/sdcard/retriever_%" PRId64 "_%zu_%zu.rgb",systemTime(),dst.mWidth,dst.mHeight);
     sprintf(retriever_propty_rgb, "retriever.dump.rgb");
     if (mDstFormat == OMX_COLOR_Format16bitRGB565){
@@ -851,14 +872,14 @@ status_t ColorConverter::convertYUVToRGBHW(const BitmapParams &src, const Bitmap
     else
         return UNKNOWN_ERROR;
 // debug: dump output buffer
-/*	sprintf(name, "/sdcard/clrcvt_output_%d_dmp", i);
-	fp = fopen(name, "w");
-	if (mDstFormat == OMX_COLOR_Format16bitRGB565)
-		fwrite(dst.mBits, dst.mWidth*dst.mHeight*2, 1, fp);
-	else if (mDstFormat == OMX_COLOR_Format32bitARGB8888)
-		fwrite(dst.mBits, dst.mWidth*dst.mHeight*4, 1, fp);
-	fclose(fp);
-	i++;
+/*      sprintf(name, "/sdcard/clrcvt_output_%d_dmp", i);
+        fp = fopen(name, "w");
+        if (mDstFormat == OMX_COLOR_Format16bitRGB565)
+                fwrite(dst.mBits, dst.mWidth*dst.mHeight*2, 1, fp);
+        else if (mDstFormat == OMX_COLOR_Format32bitARGB8888)
+                fwrite(dst.mBits, dst.mWidth*dst.mHeight*4, 1, fp);
+        fclose(fp);
+        i++;
 */
     return OK;
 }
@@ -882,3 +903,4 @@ void ColorConverter::dumpColorConverterData(const char * filepath, const void * 
 #endif
 
 }  // namespace android
+

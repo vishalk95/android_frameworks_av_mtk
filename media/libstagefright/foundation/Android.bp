@@ -19,6 +19,14 @@ cc_library_shared {
         "include/media/stagefright/foundation",
     ],
 
+    product_variables: {
+        lineage: {
+            uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
+            },
+        },
+    },
+
     header_libs: [
         "libhardware_headers",
         "libstagefright_foundation_headers",
@@ -37,7 +45,6 @@ cc_library_shared {
         "-Wno-multichar",
         "-Werror",
         "-Wall",
-        "-DMTK_HARDWARE",
     ],
 
     shared_libs: [

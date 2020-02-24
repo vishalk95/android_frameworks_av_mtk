@@ -62,6 +62,12 @@
 #include "include/SharedMemoryBuffer.h"
 #include <media/stagefright/omx/OMXUtils.h>
 
+#ifndef MTK_HARDWARE
+#define MTK_HARDWARE
+#endif
+
+#define USE_LEGACY_RESCALING 1
+
 namespace android {
 
 using binder::Status;
@@ -3190,7 +3196,12 @@ status_t ACodec::setSupportedOutputFormat(bool getLegacyFlexibleFormat) {
                 || format.eColorFormat == OMX_COLOR_FormatYUV420PackedPlanar
                 || format.eColorFormat == OMX_COLOR_FormatYUV420SemiPlanar
                 || format.eColorFormat == OMX_COLOR_FormatYUV420PackedSemiPlanar
-                || format.eColorFormat == OMX_TI_COLOR_FormatYUV420PackedSemiPlanar) {
+                || format.eColorFormat == OMX_TI_COLOR_FormatYUV420PackedSemiPlanar
+#ifdef MTK_HARDWARE
+				|| format.eColorFormat == HAL_PIXEL_FORMAT_YV12
+				|| format.eColorFormat == OMX_MTK_COLOR_FormatYV12
+#endif                
+                ) {
             break;
         }
         // find best legacy non-standard format
@@ -4794,6 +4805,8 @@ status_t ACodec::getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify) {
                     notify->setInt32("stride", videoDef->nStride);
                     notify->setInt32("slice-height", videoDef->nSliceHeight);
                     notify->setInt32("color-format", videoDef->eColorFormat);
+                   
+
 
                     if (mNativeWindow == NULL) {
                         DescribeColorFormat2Params describeParams;
@@ -4840,7 +4853,16 @@ status_t ACodec::getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify) {
                             rect.nWidth = videoDef->nFrameWidth;
                             rect.nHeight = videoDef->nFrameHeight;
                         }
-
+#ifdef MTK_HARDWARE
+						if (!strncmp(mComponentName.c_str(), "OMX.MTK.", 8) && mOMXNode->getConfig(
+								(OMX_INDEXTYPE) 0x7f00001c /* OMX_IndexVendorMtkOmxVdecGetCropInfo */,
+								&rect, sizeof(rect)) != OK) {
+							rect.nLeft = 0;
+							rect.nTop = 0;
+							rect.nWidth = videoDef->nFrameWidth;
+							rect.nHeight = videoDef->nFrameHeight;
+						}
+#endif			
                         if (rect.nLeft < 0 ||
                             rect.nTop < 0 ||
                             rect.nLeft + rect.nWidth > videoDef->nFrameWidth ||
@@ -5286,25 +5308,6 @@ void ACodec::onOutputFormatChanged(sp<const AMessage> expectedFormat) {
 
     if (mTunneled) {
         sendFormatChange();
-    }
-}
-
-void ACodec::addKeyFormatChangesToRenderBufferNotification(sp<AMessage> &notify) {
-    AString mime;
-    CHECK(mOutputFormat->findString("mime", &mime));
-
-    if (mime == MEDIA_MIMETYPE_VIDEO_RAW && mNativeWindow != NULL) {
-        // notify renderer of the crop change and dataspace change
-        // NOTE: native window uses extended right-bottom coordinate
-        int32_t left, top, right, bottom;
-        if (mOutputFormat->findRect("crop", &left, &top, &right, &bottom)) {
-            notify->setRect("crop", left, top, right + 1, bottom + 1);
-        }
-
-        int32_t dataSpace;
-        if (mOutputFormat->findInt32("android._dataspace", &dataSpace)) {
-            notify->setInt32("dataspace", dataSpace);
-        }
     }
 }
 
@@ -7915,7 +7918,6 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
                 mCodec->addKeyFormatChangesToRenderBufferNotification(reply);
                 mCodec->sendFormatChange();
 #endif
-
                 ALOGV("[%s] Output port now reenabled.", mCodec->mComponentName.c_str());
 
                 if (mCodec->mExecutingState->active()) {
@@ -7929,7 +7931,6 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
 
             return false;
         }
-
 #ifdef USE_LEGACY_RESCALING
         case OMX_EventPortSettingsChanged:
             // Exynos OMX wants to share its' output crop
@@ -7938,7 +7939,6 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
             return true;
         break;
 #endif
-
         default:
             return BaseState::onOMXEvent(event, data1, data2);
     }
@@ -8499,6 +8499,27 @@ status_t ACodec::getOMXChannelMapping(size_t numChannels, OMX_AUDIO_CHANNELTYPE 
 
     return OK;
 }
+
+#ifdef USE_LEGACY_RESCALING
+void ACodec::addKeyFormatChangesToRenderBufferNotification(sp<AMessage> &notify) {
+    AString mime;
+    CHECK(mOutputFormat->findString("mime", &mime));
+    if (mime == MEDIA_MIMETYPE_VIDEO_RAW && mNativeWindow != NULL) {
+        // notify renderer of the crop change and dataspace change
+        // NOTE: native window uses extended right-bottom coordinate
+        int32_t left, top, right, bottom;
+        if (mOutputFormat->findRect("crop", &left, &top, &right, &bottom)) {
+            notify->setRect("crop", left, top, right + 1, bottom + 1);
+        }
+        int32_t dataSpace;
+        if (mOutputFormat->findInt32("android._dataspace", &dataSpace)) {
+            notify->setInt32("dataspace", dataSpace);
+        }
+    }
+}
+
+
+#endif
 
 void ACodec::setTrebleFlag(bool trebleFlag) {
     mTrebleFlag = trebleFlag;

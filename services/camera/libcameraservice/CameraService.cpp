@@ -64,6 +64,10 @@
 #include "api2/CameraDeviceClient.h"
 #include "utils/CameraTraces.h"
 
+#ifdef MTK_HARDWARE
+    #include <camera/MtkCameraParameters.h>
+#endif
+
 namespace {
     const char* kPermissionServiceName = "permission";
 }; // namespace anonymous
@@ -170,6 +174,19 @@ CameraService::CameraService() :
         mNumberOfCameras(0), mNumberOfNormalCameras(0),
         mSoundRef(0), mInitialized(false) {
     ALOGI("CameraService started (pid=%d)", getpid());
+
+
+//#ifdef MTK_FIXUSER
+#ifdef MTK_HARDWARE        
+	const int MAXL=3;
+    int alu[MAXL] = { getCallingUid() , getuid() , 0 };
+    std::set<userid_t> newAllowedUsers;
+    for (size_t i = 0; i < MAXL ; i++) {
+        newAllowedUsers.insert(static_cast<userid_t>(alu[i]));
+    }
+    mAllowedUsers = std::move(newAllowedUsers);
+#endif
+//#endif
 
     this->camera_device_status_change = android::camera_device_status_change;
     this->torch_mode_status_change = android::torch_mode_status_change;
@@ -442,6 +459,9 @@ Status CameraService::getNumberOfCameras(int32_t type, int32_t* numCameras) {
             *numCameras = mNumberOfNormalCameras;
             break;
         case CAMERA_TYPE_ALL:
+#ifdef MTK_HARDWARE
+    LOG1("[getNumberOfCameras] NumberOfCameras:%d \n", mNumberOfCameras);
+#endif 
             *numCameras = mNumberOfCameras;
             break;
         default:
@@ -1011,6 +1031,8 @@ status_t CameraService::handleEvictionsLocked(const String8& cameraId, int clien
         std::shared_ptr<resource_policy::ClientDescriptor<String8, sp<BasicClient>>>* partial) {
     ATRACE_CALL();
     status_t ret = NO_ERROR;
+    
+    
     std::vector<DescriptorPtr> evictedClients;
     DescriptorPtr clientDescriptor;
     {
@@ -1052,9 +1074,60 @@ status_t CameraService::handleEvictionsLocked(const String8& cameraId, int clien
             return err;
         }
 
-        // Update all active clients' priorities
+        // Update all active clients' priorityScores
         std::map<int,resource_policy::ClientPriority> pidToPriorityMap;
+        //!++
+        ALOGI("Incoming clientPid(%d) packageName(%s) priorities(%d)",clientPid,packageName.string(),priorityScores[priorityScores.size() - 1]);
+        if(strcmp("mtk_vt_use", packageName) == 0)
+        {
+            ALOGI("Incoming client is mtk_vt_use, set priorities(old:%d) = 0",priorityScores[priorityScores.size() - 1]);
+            priorityScores[priorityScores.size() - 1] = 0;
+        }
+		//!--
+        
+//  modify for preventing 3rd party pre-empty begin
+	for(size_t n = 0; n< 2; n++ )
+	{
+		String8 id = String8::format("%zu", n);
+		String8 pkg;
+		if(mActiveClientManager.getCameraClient(id)!=0)
+		{
+			pkg = String8(mActiveClientManager.getCameraClient(id)->getPackageName().string());
+		}
+		else
+		{
+			ALOGI("Camera[%zu] has no client NOW",n);
+			continue;
+		}
+		if(0 == strcmp("com.android.camera2",pkg.string())&& 0 == strcmp("com.mediatek.camera",pkg.string())&& 0 == strcmp("com.google.android.apps.photos",packageName.string()))
+		{
+			ALOGI("mediatek camera is running, google photo is excluded");
+			return BAD_VALUE;
+		}
+	}
+//modify for preventing 3rd party pre-empty end  
+
         for (size_t i = 0; i < ownerPids.size() - 1; i++) {
+            //!++
+            //make sure VT has top priority
+            if( mActiveClientManager.getCameraClient(cameraId) != 0 &&
+                strcmp("mtk_vt_use", String8(mActiveClientManager.getCameraClient(cameraId)->getPackageName().string())) == 0)
+          {
+                int clientPid_vt = mActiveClientManager.getCameraClient(cameraId)->getClientPid();
+                if(clientPid_vt == ownerPids[i])
+                {
+                    priorityScores[i] = 0;
+                   ALOGI("i(%zu) pid(%d) => mtk_vt_use, set priorities(old:%d) = 0",i,ownerPids[i],priorityScores[i]);
+                }
+            }
+            else if(strcmp("mtk_vt_use", packageName) == 0)
+            {
+                priorityScores[i] = INT_MAX;
+              ALOGI("i(%zu) pid(%d) not mtk_vt_use, set priorities(old:%d) = INT_MAX",i,ownerPids[i],priorityScores[i]);
+            }
+            // ALOGI("i(%zu) pid(%d) priorities(%d),Priority(%d)",i,ownerPids[i],priorityScores[i],getCameraPriorityFromProcState(priorityScores[i]));
+            //!--
+
             pidToPriorityMap.emplace(ownerPids[i],
                     resource_policy::ClientPriority(priorityScores[i], states[i]));
         }
@@ -1131,6 +1204,18 @@ status_t CameraService::handleEvictionsLocked(const String8& cameraId, int clien
 
             ALOGE("CameraService::connect evicting conflicting client for camera ID %s",
                     i->getKey().string());
+                    
+                    
+            ALOGD(String8::format("EVICT device %s client held by package %s (PID"
+                    " %" PRId32 ", score %" PRId32 ", state %" PRId32 ")\n - Evicted by device %s client for"
+                    " package %s (PID %d, score %" PRId32 ", state %" PRId32 ")",
+                    i->getKey().string(), String8{clientSp->getPackageName()}.string(),
+                    i->getOwnerId(), i->getPriority().getScore(),
+                    i->getPriority().getState(), cameraId.string(),
+                    packageName.string(), clientPid,
+                    priorityScores[priorityScores.size() - 1],
+                    states[states.size() - 1]));        
+                    
             evictedClients.push_back(i);
 
             // Log the clients evicted
@@ -1289,6 +1374,14 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
     binder::Status ret = binder::Status::ok();
 
     String8 clientName8(clientPackageName);
+
+/*
+	if(strcmp("cameraserver", clientName8.string()) == 0 && strcmp("1",cameraId.string()) == 0) {
+		
+		return STATUS_ERROR_FMT(ERROR_CAMERA_IN_USE,
+                            "Other client using camera, ID \"%s\" currently unavailable",
+                            cameraId.string());
+	} */
 
     int originalClientPid = 0;
 

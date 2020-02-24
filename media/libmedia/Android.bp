@@ -24,6 +24,13 @@ cc_library {
         "-Wno-error=deprecated-declarations",
         "-Wall",
     ],
+    product_variables: {
+        lineage: {
+			uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
+            },
+        },
+    },
     shared_libs: ["libutils", "liblog", "libgui"],
     header_libs: [
         "libmedia_headers",
@@ -108,7 +115,17 @@ cc_defaults {
         "-Wno-error=deprecated-declarations",
         "-Wall",
     ],
-
+    product_variables: {
+        lineage: {
+			uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
+            },
+            uses_legacy_mtk_av_blob: {
+             cppflags: ["-DUSE_LEGACY_MTK_AV_BLOB"],
+            },
+        },
+        
+    },
     sanitize: {
         misc_undefined: [
             "unsigned-integer-overflow",
@@ -175,6 +192,10 @@ cc_library_shared {
         "mtkaudio_stubs.cpp",
     ],
 
+    include_dirs: [
+        "frameworks/rs/cpp/util",
+    ],
+
     shared_libs: [
         "libui",
         "liblog",
@@ -228,7 +249,17 @@ cc_library_shared {
         "-Wno-error=deprecated-declarations",
         "-Wall",
     ],
-
+    product_variables: {
+        lineage: {
+			uses_mtk_hardware: {
+             cppflags: ["-DMTK_HARDWARE"],
+            },
+            uses_legacy_mtk_av_blob: {
+             cppflags: ["-DUSE_LEGACY_MTK_AV_BLOB"],
+            },
+        },
+        
+    },
     sanitize: {
         misc_undefined: [
             "unsigned-integer-overflow",

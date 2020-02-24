@@ -43,4 +43,9 @@ LOCAL_SHARED_LIBRARIES += \
     libutils \
     libmedia_helper
 
+# zormax add
+LOCAL_SHARED_LIBRARIES += \
+    libmedia \
+    libaudiocustparam
+
 include $(BUILD_SHARED_LIBRARY)

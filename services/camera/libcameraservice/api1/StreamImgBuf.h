@@ -63,15 +63,13 @@ struct ImgInfo : public LightRefBase<ImgInfo>
     uint32_t                        mu4ImgWidth;
     uint32_t                        mu4ImgHeight;
     uint32_t                        mu4BitsPerPixel;
-    uint32_t                        mi4Orientation;
     //
                                     ImgInfo(
                                         uint32_t const u4ImgWidth,
                                         uint32_t const u4ImgHeight,
                                         char const*const ImgFormat,
                                         int32_t const i4ImgFormat,
-                                        char const*const pImgName = "",
-                                        uint32_t const u4Orientation = 0
+                                        char const*const pImgName = ""
                                     );
 };
 
@@ -136,10 +134,7 @@ public:     ////                    Instantiation.
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 public:     ////                    Debug.
     void                            dump() const;
-    //
-    uint32_t                        getOrientation();
-    void                            setNeedDisplayRotation(bool bNeed);
-    bool                            getNeedDisplayRotation();
+
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 //  Data Members.
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -152,10 +147,10 @@ protected:  ////                    Memory.
     sp<ANativeWindowBuffer>         mpANWBuffer;    //
     int32_t                         mi4Stride;      //
     size_t                          mBufSize;       //
-    bool                            mbNeedRotation; //  for display rotation
 };
 
 
 }; // namespace NSDisplayClient
 }; // namespace android
 #endif  //_MTK_CAMERA_CLIENT_DISPLAYCLIENT_STREAMIMGBUF_H_
+

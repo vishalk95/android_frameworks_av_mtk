@@ -41,10 +41,13 @@ LOCAL_SHARED_LIBRARIES :=       \
     libhidlbase                 \
     android.hardware.media.omx@1.0 \
 
+
+
 LOCAL_STATIC_LIBRARIES :=       \
     libstagefright_nuplayer     \
     libstagefright_rtsp         \
     libstagefright_timedtext    \
+
 
 LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := libmedia
 
@@ -59,11 +62,20 @@ LOCAL_C_INCLUDES :=                                                 \
     frameworks/native/include/media/hardware                 \
     external/tremolo/Tremolo                                 \
 
+
 LOCAL_CFLAGS += -Werror -Wno-error=deprecated-declarations -Wall
+
+ifeq ($(BOARD_USES_MTK_HARDWARE1), true)
+LOCAL_SHARED_LIBRARIES += \
+    libmtkplayer 
+
+LOCAL_CFLAGS += -DMTK_HARDWARE
+
+endif
 
 LOCAL_MODULE:= libmediaplayerservice
 
-LOCAL_32_BIT_ONLY := true
+#LOCAL_32_BIT_ONLY := true
 
 LOCAL_SANITIZE := cfi
 LOCAL_SANITIZE_DIAG := cfi

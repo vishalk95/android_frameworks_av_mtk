@@ -1090,6 +1090,18 @@ status_t AudioFlinger::setStreamVolume(audio_stream_type_t stream, float value,
         volumeInterfaces[i]->setStreamVolume(stream, value);
     }
 
+#ifdef MTK_HARDWARE
+    // MTK FM Volume
+    if(stream == AUDIO_STREAM_MUSIC) {
+        sp<ThreadBase> thread;
+        thread = checkPlaybackThread_l(output);
+        if (thread == primaryPlaybackThread_l()) {
+			sp<DeviceHalInterface> dev = mPrimaryHardwareDev->hwDevice();
+            dev->setParameters (String8::format("SetFmVolume=%f", value));
+        }
+    }
+#endif
+
     return NO_ERROR;
 }
 
@@ -1104,6 +1116,15 @@ status_t AudioFlinger::setStreamMute(audio_stream_type_t stream, bool muted)
     if (status != NO_ERROR) {
         return status;
     }
+#ifdef MTK_HARDWARE    
+    if(stream == AUDIO_STREAM_MUSIC)
+    {
+        //MTK_ALOG_D("setStreamMute MATV muted=%d",muted);
+  			sp<DeviceHalInterface> dev = mPrimaryHardwareDev->hwDevice();
+            dev->setParameters (String8::format("SetMatvMute=%d",muted));
+    }
+#endif
+
     ALOG_ASSERT(stream != AUDIO_STREAM_PATCH, "attempt to mute AUDIO_STREAM_PATCH");
 
     if (uint32_t(stream) == AUDIO_STREAM_ENFORCED_AUDIBLE) {
@@ -1163,6 +1184,8 @@ void AudioFlinger::broacastParametersToRecordThreads_l(const String8& keyValuePa
     }
 }
 
+static int mMTKParaSet = false ;
+
 status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& keyValuePairs)
 {
     ALOGV("setParameters(): io %d, keyvalue %s, calling pid %d",
@@ -1187,9 +1210,18 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
                 // return success if at least one audio device accepts the parameters as not all
                 // HALs are requested to support all parameters. If no audio device supports the
                 // requested parameters, the last error is reported.
+
                 if (final_result != NO_ERROR) {
                     final_result = result;
                 }
+                if (!mMTKParaSet){
+                 result = dev->setParameters (String8::format("SetBesLoudnessStatus=%d", 1));
+                 result = dev->setParameters (String8::format("SetAudEnhStatus=%d", 1));
+				 mMTKParaSet = true;
+				}
+                //result = dev->setParameters (String8::format("SetBesAudEnhStatus=%d", 0));
+                //result = dev->setParameters (String8::format("SetMusicPlusStatus=%d", 0));
+                
             }
             mHardwareStatus = AUDIO_HW_IDLE;
         }
@@ -2988,13 +3020,9 @@ sp<IEffect> AudioFlinger::createEffect(
             }
             // look for the thread where the specified audio session is present
             for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
-                uint32_t sessionType = mPlaybackThreads.valueAt(i)->hasAudioSession(sessionId);
-                if (sessionType != 0) {
+                if (mPlaybackThreads.valueAt(i)->hasAudioSession(sessionId) != 0) {
                     io = mPlaybackThreads.keyAt(i);
-                    // thread with same effect session is preferable
-                    if ((sessionType & ThreadBase::EFFECT_SESSION) != 0) {
-                        break;
-                    }
+                    break;
                 }
             }
             if (io == AUDIO_IO_HANDLE_NONE) {
@@ -3020,21 +3048,6 @@ sp<IEffect> AudioFlinger::createEffect(
                 io = mPlaybackThreads.keyAt(0);
             }
             ALOGV("createEffect() got io %d for effect %s", io, desc.name);
-        } else if (checkPlaybackThread_l(io) != nullptr) {
-            // allow only one effect chain per sessionId on mPlaybackThreads.
-            for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
-                const audio_io_handle_t checkIo = mPlaybackThreads.keyAt(i);
-                if (io == checkIo) continue;
-                const uint32_t sessionType =
-                        mPlaybackThreads.valueAt(i)->hasAudioSession(sessionId);
-                if ((sessionType & ThreadBase::EFFECT_SESSION) != 0) {
-                    ALOGE("%s: effect %s io %d denied because session %d effect exists on io %d",
-                            __func__, desc.name, (int)io, (int)sessionId, (int)checkIo);
-                    android_errorWriteLog(0x534e4554, "123237974");
-                    lStatus = BAD_VALUE;
-                    goto Exit;
-                }
-            }
         }
         ThreadBase *thread = checkRecordThread_l(io);
         if (thread == NULL) {

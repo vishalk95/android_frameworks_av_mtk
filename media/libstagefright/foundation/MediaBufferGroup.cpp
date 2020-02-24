@@ -37,6 +37,8 @@ MediaBufferGroup::MediaBufferGroup() :
     mGrowthLimit(0) {
 }
 #endif
+
+
 MediaBufferGroup::MediaBufferGroup(size_t growthLimit) :
     mGrowthLimit(growthLimit) {
 }
@@ -148,6 +150,8 @@ status_t MediaBufferGroup::acquire_buffer(MediaBuffer **buffer, bool nonBlocking
     return acquire_buffer(buffer, nonBlocking, 0);
 }
 #endif
+
+
 status_t MediaBufferGroup::acquire_buffer(
         MediaBuffer **out, bool nonBlocking, size_t requestedSize) {
     Mutex::Autolock autoLock(mLock);
