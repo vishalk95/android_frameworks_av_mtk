@@ -145,11 +145,12 @@ private:
     };
     Vector<ActiveBuffer> mActiveBuffers;
     // for buffer ptr to buffer id translation
+#ifndef USE_LEGACY_MTK_AV_BLOB
     Mutex mBufferIDLock;
     uint32_t mBufferIDCount;
     KeyedVector<IOMX::buffer_id, OMX_BUFFERHEADERTYPE *> mBufferIDToBufferHeader;
     KeyedVector<OMX_BUFFERHEADERTYPE *, IOMX::buffer_id> mBufferHeaderToBufferID;
-
+#endif
     bool mLegacyAdaptiveExperiment;
     IOMX::PortMode mPortMode[2];
     // metadata and secure buffer types and graphic buffer mode tracking
@@ -191,6 +192,9 @@ private:
     // For buffer id management
     IOMX::buffer_id makeBufferID(OMX_BUFFERHEADERTYPE *bufferHeader);
     OMX_BUFFERHEADERTYPE *findBufferHeader(IOMX::buffer_id buffer, OMX_U32 portIndex);
+#ifdef USE_LEGACY_MTK_AV_BLOB
+    OMX_BUFFERHEADERTYPE *findBufferHeader(IOMX::buffer_id buffer);
+#endif
     IOMX::buffer_id findBufferID(OMX_BUFFERHEADERTYPE *bufferHeader);
     void invalidateBufferID(IOMX::buffer_id buffer);
 
