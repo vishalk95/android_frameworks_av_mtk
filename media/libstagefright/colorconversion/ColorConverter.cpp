@@ -32,7 +32,7 @@
 #include <utils/Timers.h>
 #include <inttypes.h>
 
-static const int OMX_MTK_COLOR_FormatYV12 = 0x7F000200;
+//static const int OMX_MTK_COLOR_FormatYV12 = 0x7F000200;
 #endif
 
 #define USE_LIBYUV

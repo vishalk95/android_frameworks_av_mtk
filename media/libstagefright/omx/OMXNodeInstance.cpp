@@ -355,7 +355,6 @@ OMXNodeInstance::OMXNodeInstance(
 #ifndef USE_LEGACY_MTK_AV_BLOB
       mBufferIDCount(0),
 #endif
-      mBufferIDCount(0),
       mRestorePtsFailed(false),
       mMaxTimestampGapUs(-1ll),
       mPrevOriginalTimeUs(-1ll),

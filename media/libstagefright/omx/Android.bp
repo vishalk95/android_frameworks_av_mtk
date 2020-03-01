@@ -80,8 +80,9 @@ cc_library_shared {
     ],
 
 
-    cppflags: ["-DUSE_LEGACY_MTK_AV_BLOB"],
-    cppflags: ["-DMTK_HARDWARE"],
+    cppflags: ["-DUSE_LEGACY_MTK_AV_BLOB",
+               "-DMTK_HARDWARE",
+              ],
 
     product_variables: {
         qualcomm: {
