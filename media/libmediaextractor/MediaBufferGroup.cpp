@@ -46,12 +46,6 @@ struct MediaBufferGroup::InternalData {
 MediaBufferGroup::MediaBufferGroup(size_t growthLimit)
     : mInternal(new InternalData()) {
     mInternal->mGrowthLimit = growthLimit;
-
-#ifdef MTK_HARDWARE
-MediaBufferGroup::MediaBufferGroup() :
-    mGrowthLimit(0) {
-}
-#endif
 }
 
 MediaBufferGroup::MediaBufferGroup(size_t buffers, size_t buffer_size, size_t growthLimit)
@@ -158,11 +152,6 @@ bool MediaBufferGroup::has_buffers() {
     return false;
 }
 
-#ifdef MTK_HARDWARE
-status_t MediaBufferGroup::acquire_buffer(MediaBuffer **buffer, bool nonBlocking) {
-    return acquire_buffer(buffer, nonBlocking, 0);
-}
-#endif
 status_t MediaBufferGroup::acquire_buffer(
         MediaBufferBase **out, bool nonBlocking, size_t requestedSize) {
     Mutex::Autolock autoLock(mInternal->mLock);
