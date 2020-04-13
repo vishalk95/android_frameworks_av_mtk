@@ -206,9 +206,9 @@ dump() const
     MY_LOGD(
         "[%s](%s@%dx%d@%d-bit@%d), ion:%d, pBuf/pBufHndl=%p/%p/%p, Stride:%d, Timestamp:%lld",
         getBufName(), getImgFormat().string(), getImgWidth(), getImgHeight(),
-        getBitsPerPixel(), getBufSize(),
+        getBitsPerPixel(), (int)getBufSize(),
         mfdIon,
-        mpBufBase, mpBufHndl, *mpBufHndl, mi4Stride, mi8Timestamp
+        mpBufBase, mpBufHndl, *mpBufHndl, mi4Stride, (long long)mi8Timestamp
     );
 }
 
