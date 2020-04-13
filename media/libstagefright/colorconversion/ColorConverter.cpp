@@ -478,7 +478,6 @@ getWriteToDst(OMX_COLOR_FORMATTYPE dstFormat, uint8_t *kAdjustedClip) {
     return nullptr;
 }
 
-#if !(defined(USE_LIBYUV) && defined(MTK_HARDWARE))
 status_t ColorConverter::convertYUV420Planar(
         const BitmapParams &src, const BitmapParams &dst) {
     uint8_t *kAdjustedClip = initClip();
@@ -551,7 +550,6 @@ status_t ColorConverter::convertYUV420Planar(
 
     return OK;
 }
-#endif
 
 status_t ColorConverter::convertYUV420Planar16(
         const BitmapParams &src, const BitmapParams &dst) {
