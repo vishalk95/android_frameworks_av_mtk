@@ -30,6 +30,14 @@ public:
         ROT_INVALID = 0x80
     };
 
+    enum DpPaddingSide
+    {
+        PADDING_LEFT   = 0b0001,
+        PADDING_TOP    = 0b0010,
+        PADDING_RIGHT  = 0b0100,
+        PADDING_BOTTOM = 0b1000
+    };
+
     DP_STATUS_ENUM setSrcBuffer(void     *pVABase,
                                 uint32_t size);
 
@@ -153,9 +161,11 @@ public:
 
     DP_STATUS_ENUM setUser(uint32_t eID = 0);
 
-    DP_STATUS_ENUM invalidate();
+    DP_STATUS_ENUM invalidate(struct timeval *endTime = NULL);
 
     DP_STATUS_ENUM pq_process();
+
+    static int32_t queryPaddingSide(uint32_t transform);
 
 private:
     DpStream          *m_pStream;
@@ -193,17 +203,20 @@ private:
     int32_t           m_cropSubPixelY;
     int32_t           m_targetXStart;
     int32_t           m_targetYStart;
+    int32_t           m_roiWidth;
+    int32_t           m_roiHeight;
     int32_t           m_rotation;
     bool              m_frameChange;
     bool              m_flipStatus;
     bool              m_ditherStatus;
     DpBlitUser        m_userID;
     DpPqConfig        m_PqConfig;
+    DpPqParam         m_PqParam;
     uint32_t          m_PqID;
     int32_t           m_pqSupport;
-    uint32_t          m_engFlag;
     //Compatible to 89
     int               mTdshp;
+    DpConvertBlk_NV12 *m_pConvertBlk_NV12;
 };
 
 #endif  // __DP_BLIT_STREAM_H__
