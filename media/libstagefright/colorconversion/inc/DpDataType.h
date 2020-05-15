@@ -44,8 +44,6 @@ inline float roundf(float x)
 }
 #endif  // CONFIG_FOR_OS_WINDOWS
 
-#define DP_UNUSED(expr) do { (void)(expr); } while (0)
-
 #ifndef MAX
     #define MAX(x, y)   ((x) >= (y))? (x): (y)
 #endif // MAX
@@ -412,58 +410,19 @@ typedef enum ISP_CAPTURE_SCENRAIO_ENUM
 struct MDPSetting {
     void* buffer;
     uint32_t size;
-    uint32_t offset;
 
     MDPSetting():buffer(NULL),
-                 size(0),
-                 offset(0)
-    {
-    }
-};
-
-#define DRE_DEFAULT_USERID (0x8000000000000000L)
-
-struct DpDREParam {
-    enum Cmd {
-        Nothing = 0,
-        Initialize = 1 << 0,
-        UnInitialize = 1 << 1,
-        Default = 1 << 2,
-        Generate = 1 << 3,
-        Apply = 1 << 4
-    };
-
-    enum DRESRAM {
-        SRAM00 = 0,
-        SRAM01,
-        SRAMDefault
-    };
-
-    // members
-    uint32_t           cmd;
-    unsigned long long userId;
-    void               *buffer;
-    uint32_t           SRAMId;
-    // tuning member
-    void               *p_customSetting;
-    uint32_t           customIndex;
-
-    DpDREParam():cmd(Cmd::Nothing),
-                userId(DRE_DEFAULT_USERID),
-                buffer(NULL),
-                SRAMId(DRESRAM::SRAMDefault),
-                p_customSetting(NULL)
+                 size(0)
     {
     }
 };
 
 struct ClearZoomParam {
     ISP_CAPTURE_SCENRAIO_ENUM captureShot;
-    // tuning member
-    void               *p_customSetting;
+    MDPSetting* p_mdpSetting;
 
     ClearZoomParam():captureShot(CAPTURE_SINGLE),
-                     p_customSetting(NULL)
+                     p_mdpSetting(NULL)
     {
     }
 };
@@ -473,20 +432,16 @@ struct VSDOFParam {
     uint8_t  defaultUpTable;
     uint8_t  defaultDownTable;
     uint32_t IBSEGain;
-    uint32_t switchRatio6Tap6nTap;
-    uint32_t switchRatio6nTapAcc;
 
     VSDOFParam():isRefocus(false),
                  defaultUpTable(0),
                  defaultDownTable(0),
-                 IBSEGain(0),
-                 switchRatio6Tap6nTap(1),
-                 switchRatio6nTapAcc(26)
+                 IBSEGain(0)
     {
     }
 };
 
-struct DpVideoParam
+typedef struct
 {
     uint32_t id;
     uint32_t timeStamp;
@@ -496,14 +451,7 @@ struct DpVideoParam
 #endif
     DP_VDEC_DRV_COLORDESC_T HDRinfo;
     uint32_t reserved[13];   // padding and reserved
-
-    DpVideoParam():isHDR2SDR(false)
-#if CONFIG_FOR_OS_ANDROID
-                 ,grallocExtraHandle(NULL)
-#endif
-    {
-    }
-};
+} DpVideoParam;
 
 typedef struct
 {
@@ -513,11 +461,11 @@ typedef struct
     uint32_t reserved[8];  // padding and reserved
 } DpImageParam;
 
-struct DpIspParam {
+typedef struct
+{
     uint32_t iso;
     ClearZoomParam clearZoomParam;
     VSDOFParam vsdofParam;
-    DpDREParam dpDREParam;
     bool isIspScenario;
     uint32_t ispScenario;
     uint32_t timestamp;
@@ -525,28 +473,8 @@ struct DpIspParam {
     uint32_t requestNo;
     uint32_t lensId;
     char userString[8];
-    MDPSetting *p_mdpSetting;
-    int LV;
-    unsigned int *LCSO;
-    unsigned int LCSO_Size;
-    unsigned int *DCE;
-    unsigned int DCE_Size;
-    unsigned int *LCE;
-    unsigned int LCE_Size;
-    void         *p_faceInfor;
     uint32_t reserved[19];
-
-    DpIspParam():LV(0),
-                LCSO(NULL),
-                LCSO_Size(0),
-                DCE(NULL),
-                DCE_Size(0),
-                LCE(NULL),
-                LCE_Size(0),
-                p_faceInfor(NULL)
-    {
-    }
-};
+} DpIspParam;
 
 union DpPqParamUnion{
     DpVideoParam video;
@@ -574,22 +502,13 @@ typedef enum PqEnableFlag
     PQ_CCORR_EN          = 1 << 8,
 }PqEnableFlag;
 
-typedef enum DP_GAMUT_ENUM
-{
-    DP_GAMUT_SRGB = 0,
-    DP_GAMUT_DISPLAY_P3,
-} DP_GAMUT_ENUM;
-
 struct DpPqParam {
     uint32_t enable;
     DP_MEDIA_TYPE_ENUM scenario;
-    DP_GAMUT_ENUM srcGammut;
 
     DpPqParamUnion u;
-
     DpPqParam():enable(0),
-                scenario(MEDIA_UNKNOWN),
-                srcGammut(DP_GAMUT_SRGB)
+                scenario(MEDIA_UNKNOWN)
     {
         memset(&u, 0, sizeof(u));
     }
@@ -608,130 +527,126 @@ struct DpPqConfig {
 
 
 // Format group: 0-RGB, 1-YUV, 2-Bayer raw, 3-compressed format
-#define DP_COLORFMT_PACK(PACKED, LOOSE, VIDEO, PLANE, HFACTOR, VFACTOR, BITS, GROUP, SWAP_ENABLE, UNIQUEID)  \
-    (((PACKED)      << 27) |                                                             \
-     ((LOOSE)       << 26) |                                                             \
-     ((VIDEO)       << 23) |                                                             \
-     ((PLANE)       << 21) |                                                             \
-     ((HFACTOR)     << 19) |                                                             \
-     ((VFACTOR)     << 18) |                                                             \
-     ((BITS)        << 8)  |                                                             \
-     ((GROUP)       << 6)  |                                                             \
-     ((SWAP_ENABLE) << 5)  |                                                             \
-     ((UNIQUEID)    << 0))
+#define DP_COLORFMT_PACK(PACKED, LOOSE, VIDEO, PLANE, COPLANE, HFACTOR, VFACTOR, BITS, GROUP ,SWAP_ENABLE, UNIQUEID)  \
+    ((PACKED        << 31) |                                                             \
+     (LOOSE         << 30) |                                                             \
+     (VIDEO         << 27) |                                                             \
+     (PLANE         << 24) |                                                             \
+     (COPLANE       << 22) |                                                             \
+     (HFACTOR       << 20) |                                                             \
+     (VFACTOR       << 18) |                                                             \
+     (BITS          << 8)  |                                                             \
+     (GROUP         << 6)  |                                                             \
+     (SWAP_ENABLE   << 5)  |                                                             \
+     (UNIQUEID      << 0))
 
-#define DP_COLOR_GET_10BIT_PACKED(color)        ((0x08000000 & color) >> 27)
-#define DP_COLOR_GET_10BIT_LOOSE(color)        (((0x0C000000 & color) >> 26) == 1)
-#define DP_COLOR_GET_10BIT_TILE_MODE(color)    (((0x0C000000 & color) >> 26) == 3)
-#define DP_COLOR_GET_UFP_ENABLE(color)          ((0x02000000 & color) >> 25)
-#define DP_COLOR_GET_INTERLACED_MODE(color)     ((0x01000000 & color) >> 24)
-#define DP_COLOR_GET_BLOCK_MODE(color)          ((0x00800000 & color) >> 23)
-#define DP_COLOR_GET_PLANE_COUNT(color)         ((0x00600000 & color) >> 21) /* 1-3 */
-#define DP_COLOR_GET_H_SUBSAMPLE(color)         ((0x00180000 & color) >> 19) /* 0-2 */
-#define DP_COLOR_GET_V_SUBSAMPLE(color)         ((0x00040000 & color) >> 18) /* 0-1 */
+#define DP_COLOR_GET_10BIT_PACKED(color)        ((0x80000000 & color) >> 31)
+#define DP_COLOR_GET_10BIT_LOOSE(color)        (((0xC0000000 & color) >> 30) == 1)
+#define DP_COLOR_GET_10BIT_TILE_MODE(color)    (((0xC0000000 & color) >> 30) == 3)
+#define DP_COLOR_GET_UFP_ENABLE(color)          ((0x20000000 & color) >> 29)
+#define DP_COLOR_GET_INTERLACED_MODE(color)     ((0x10000000 & color) >> 28)
+#define DP_COLOR_GET_BLOCK_MODE(color)          ((0x08000000 & color) >> 27)
+#define DP_COLOR_GET_PLANE_COUNT(color)         ((0x07000000 & color) >> 24)
+#define DP_COLOR_IS_UV_COPLANE(color)           ((0x00C00000 & color) >> 22)
+#define DP_COLOR_GET_H_SUBSAMPLE(color)         ((0x00300000 & color) >> 20)
+#define DP_COLOR_GET_V_SUBSAMPLE(color)         ((0x000C0000 & color) >> 18)
 #define DP_COLOR_BITS_PER_PIXEL(color)          ((0x0003FF00 & color) >>  8)
 #define DP_COLOR_GET_COLOR_GROUP(color)         ((0x000000C0 & color) >>  6)
 #define DP_COLOR_GET_SWAP_ENABLE(color)         ((0x00000020 & color) >>  5)
 #define DP_COLOR_GET_UNIQUE_ID(color)           ((0x0000001F & color) >>  0)
 #define DP_COLOR_GET_HW_FORMAT(color)           ((0x0000001F & color) >>  0)
 
-#define DP_COLOR_IS_YUV(color)                  (DP_COLOR_GET_COLOR_GROUP(color) == 1)
-#define DP_COLOR_IS_UV_COPLANE(color)           ((DP_COLOR_GET_PLANE_COUNT(color) == 2) && \
-                                                 DP_COLOR_IS_YUV(color))
-
 typedef enum DP_COLOR_ENUM
 {
     DP_COLOR_UNKNOWN        = 0,
+    DP_COLOR_FULLG8         = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0,  8, 3,  0, 20),
+    DP_COLOR_FULLG10        = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 10, 3,  0, 21),
+    DP_COLOR_FULLG12        = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 12, 3,  0, 22),
+    DP_COLOR_FULLG14        = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 14, 3,  0, 26),
+    DP_COLOR_UFO10          = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 10, 3,  0, 27),
 
-    DP_COLOR_FULLG8         = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0,  8, 2,  0, 21),
-    DP_COLOR_FULLG10        = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 10, 2,  0, 21),
-    DP_COLOR_FULLG12        = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 12, 2,  0, 21),
-    DP_COLOR_FULLG14        = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 14, 2,  0, 21),
-    DP_COLOR_UFO10          = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 10, 2,  0, 24),
+    DP_COLOR_BAYER8         = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0,  8, 2,  0, 20),
+    DP_COLOR_BAYER10        = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 10, 2,  0, 21),
+    DP_COLOR_BAYER12        = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 12, 2,  0, 22),
+    DP_COLOR_RGB48          = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 48, 2,  0, 23),
+    DP_COLOR_RGB565_RAW     = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 16, 2,  0, 0),//for Bayer+Mono raw-16
 
-    DP_COLOR_BAYER8         = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0,  8, 2,  0, 20),
-    DP_COLOR_BAYER10        = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 10, 2,  0, 20),
-    DP_COLOR_BAYER12        = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 12, 2,  0, 20),
-    DP_COLOR_RGB48          = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 48, 0,  0, 23),
-    //for Bayer+Mono raw-16
-    DP_COLOR_RGB565_RAW     = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 16, 2,  0, 0),
-
-    DP_COLOR_BAYER8_UNPAK   = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0,  8, 2,  0, 22), // fix 16 bits for pixel
-    DP_COLOR_BAYER10_UNPAK  = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 10, 2,  0, 22), // fix 16 bits for pixel
-    DP_COLOR_BAYER12_UNPAK  = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 12, 2,  0, 22), // fix 16 bits for pixel
-    DP_COLOR_BAYER14_UNPAK  = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 14, 2,  0, 22), // fix 16 bits for pixel
+    DP_COLOR_BAYER8_UNPAK   = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0,  8, 3,  0, 24), // fix 16 bits for pixel
+    DP_COLOR_BAYER10_UNPAK  = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 10, 3,  0, 24), // fix 16 bits for pixel
+    DP_COLOR_BAYER12_UNPAK  = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 12, 3,  0, 24), // fix 16 bits for pixel
+    DP_COLOR_BAYER14_UNPAK  = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 14, 3,  0, 24), // fix 16 bits for pixel
 
     // Unified format
-    DP_COLOR_GREY           = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0,  8, 1,  0, 7),
+    DP_COLOR_GREY           = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0,  8, 1,  0, 7),
 
-    DP_COLOR_RGB565         = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 16, 0,  0, 0),
-    DP_COLOR_BGR565         = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 16, 0,  1, 0),
-    DP_COLOR_RGB888         = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 24, 0,  1, 1),
-    DP_COLOR_BGR888         = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 24, 0,  0, 1),
-    DP_COLOR_RGBA8888       = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 32, 0,  1, 2),
-    DP_COLOR_BGRA8888       = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 32, 0,  0, 2),
-    DP_COLOR_ARGB8888       = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 32, 0,  1, 3),
-    DP_COLOR_ABGR8888       = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 32, 0,  0, 3),
+    DP_COLOR_RGB565         = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 16, 0,  0, 0),
+    DP_COLOR_BGR565         = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 16, 0,  1, 0),
+    DP_COLOR_RGB888         = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 24, 0,  1, 1),
+    DP_COLOR_BGR888         = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 24, 0,  0, 1),
+    DP_COLOR_RGBA8888       = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32, 0,  1, 2),
+    DP_COLOR_BGRA8888       = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32, 0,  0, 2),
+    DP_COLOR_ARGB8888       = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32, 0,  1, 3),
+    DP_COLOR_ABGR8888       = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32, 0,  0, 3),
 
-    DP_COLOR_UYVY           = DP_COLORFMT_PACK(0, 0, 0, 1, 1, 0, 16, 1,  0, 4),
-    DP_COLOR_VYUY           = DP_COLORFMT_PACK(0, 0, 0, 1, 1, 0, 16, 1,  1, 4),
-    DP_COLOR_YUYV           = DP_COLORFMT_PACK(0, 0, 0, 1, 1, 0, 16, 1,  0, 5),
-    DP_COLOR_YVYU           = DP_COLORFMT_PACK(0, 0, 0, 1, 1, 0, 16, 1,  1, 5),
+    DP_COLOR_UYVY           = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 1, 0, 16, 1,  0, 4),
+    DP_COLOR_VYUY           = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 1, 0, 16, 1,  1, 4),
+    DP_COLOR_YUYV           = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 1, 0, 16, 1,  0, 5),
+    DP_COLOR_YVYU           = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 1, 0, 16, 1,  1, 5),
 
-    DP_COLOR_I420           = DP_COLORFMT_PACK(0, 0, 0, 3, 1, 1,  8, 1,  0, 8),
-    DP_COLOR_YV12           = DP_COLORFMT_PACK(0, 0, 0, 3, 1, 1,  8, 1,  1, 8),
-    DP_COLOR_I422           = DP_COLORFMT_PACK(0, 0, 0, 3, 1, 0,  8, 1,  0, 9),
-    DP_COLOR_YV16           = DP_COLORFMT_PACK(0, 0, 0, 3, 1, 0,  8, 1,  1, 9),
-    DP_COLOR_I444           = DP_COLORFMT_PACK(0, 0, 0, 3, 0, 0,  8, 1,  0, 10),
-    DP_COLOR_YV24           = DP_COLORFMT_PACK(0, 0, 0, 3, 0, 0,  8, 1,  1, 10),
+    DP_COLOR_I420           = DP_COLORFMT_PACK(0, 0,  0,   3,  0, 1, 1,  8, 1,  0, 8),
+    DP_COLOR_YV12           = DP_COLORFMT_PACK(0, 0,  0,   3,  0, 1, 1,  8, 1,  1, 8),
+    DP_COLOR_I422           = DP_COLORFMT_PACK(0, 0,  0,   3,  0, 1, 0,  8, 1,  0, 9),
+    DP_COLOR_YV16           = DP_COLORFMT_PACK(0, 0,  0,   3,  0, 1, 0,  8, 1,  1, 9),
+    DP_COLOR_I444           = DP_COLORFMT_PACK(0, 0,  0,   3,  0, 0, 0,  8, 1,  0, 10),
+    DP_COLOR_YV24           = DP_COLORFMT_PACK(0, 0,  0,   3,  0, 0, 0,  8, 1,  1, 10),
 
-    DP_COLOR_NV12           = DP_COLORFMT_PACK(0, 0, 0, 2, 1, 1,  8, 1,  0, 12),
-    DP_COLOR_NV21           = DP_COLORFMT_PACK(0, 0, 0, 2, 1, 1,  8, 1,  1, 12),
-    DP_COLOR_NV16           = DP_COLORFMT_PACK(0, 0, 0, 2, 1, 0,  8, 1,  0, 13),
-    DP_COLOR_NV61           = DP_COLORFMT_PACK(0, 0, 0, 2, 1, 0,  8, 1,  1, 13),
-    DP_COLOR_NV24           = DP_COLORFMT_PACK(0, 0, 0, 2, 0, 0,  8, 1,  0, 14),
-    DP_COLOR_NV42           = DP_COLORFMT_PACK(0, 0, 0, 2, 0, 0,  8, 1,  1, 14),
+    DP_COLOR_NV12           = DP_COLORFMT_PACK(0, 0,  0,   2,  1, 1, 1,  8, 1,  0, 12),
+    DP_COLOR_NV21           = DP_COLORFMT_PACK(0, 0,  0,   2,  1, 1, 1,  8, 1,  1, 12),
+    DP_COLOR_NV16           = DP_COLORFMT_PACK(0, 0,  0,   2,  1, 1, 0,  8, 1,  0, 13),
+    DP_COLOR_NV61           = DP_COLORFMT_PACK(0, 0,  0,   2,  1, 1, 0,  8, 1,  1, 13),
+    DP_COLOR_NV24           = DP_COLORFMT_PACK(0, 0,  0,   2,  1, 0, 0,  8, 1,  0, 14),
+    DP_COLOR_NV42           = DP_COLORFMT_PACK(0, 0,  0,   2,  1, 0, 0,  8, 1,  1, 14),
 
     // Mediatek proprietary format
-    //Frame mode + Block mode
-    DP_COLOR_420_BLKP_UFO   = DP_COLORFMT_PACK(0, 0, 5, 2, 1, 1, 256, 1, 0, 12),
-    //Frame mode + Block mode
-    DP_COLOR_420_BLKP       = DP_COLORFMT_PACK(0, 0, 1, 2, 1, 1, 256, 1, 0, 12),
-    //Field mode + Block mode
-    DP_COLOR_420_BLKI       = DP_COLORFMT_PACK(0, 0, 3, 2, 1, 1, 256, 1, 0, 12),
-    //Frame mode
-    DP_COLOR_422_BLKP       = DP_COLORFMT_PACK(0, 0, 1, 1, 1, 0, 512, 1, 0, 4),
+    DP_COLOR_420_BLKP_UFO   = DP_COLORFMT_PACK(0, 0,  5,   2,  1, 1, 1, 256, 1, 0, 12),//Frame mode + Block mode
+    DP_COLOR_420_BLKP       = DP_COLORFMT_PACK(0, 0,  1,   2,  1, 1, 1, 256, 1, 0, 12),//Frame mode + Block mode
+    DP_COLOR_420_BLKI       = DP_COLORFMT_PACK(0, 0,  3,   2,  1, 1, 1, 256, 1, 0, 12),//Field mode + Block mode
+    DP_COLOR_422_BLKP       = DP_COLORFMT_PACK(0, 0,  1,   1,  0, 1, 0, 512, 1, 0, 4), //Frame mode
 
-    DP_COLOR_IYU2           = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 24,  1, 0, 25),
-    DP_COLOR_YUV444         = DP_COLORFMT_PACK(0, 0, 0, 1, 0, 0, 24,  1, 0, 30),
+    DP_COLOR_PARGB8888      = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32,  0, 0, 26),
+    DP_COLOR_XARGB8888      = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32,  0, 0, 27),
+    DP_COLOR_PABGR8888      = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32,  0, 0, 28),
+    DP_COLOR_XABGR8888      = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 32,  0, 0, 29),
+
+    DP_COLOR_IYU2           = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 24,  1, 0, 25),
+    DP_COLOR_YUV444         = DP_COLORFMT_PACK(0, 0,  0,   1,  0, 0, 0, 24,  1, 0, 30),
 
     // Mediatek proprietary 10bit format
-    DP_COLOR_RGBA1010102    = DP_COLORFMT_PACK(1, 0, 0, 1, 0, 0, 32,  0, 1, 2),
-    DP_COLOR_BGRA1010102    = DP_COLORFMT_PACK(1, 0, 0, 1, 0, 0, 32,  0, 0, 2),
-    //Packed 10bit UYVY
-    DP_COLOR_UYVY_10P       = DP_COLORFMT_PACK(1, 0, 0, 1, 1, 0, 20,  1, 0, 4),
-    //Packed 10bit NV21
-    DP_COLOR_NV21_10P       = DP_COLORFMT_PACK(1, 0, 0, 2, 1, 1, 10,  1, 1, 12),
-    //Frame mode + Block mode
-    DP_COLOR_420_BLKP_10_H  = DP_COLORFMT_PACK(1, 0, 1, 2, 1, 1, 320, 1, 0, 12),
-    //Frame mode + HEVC tile mode
-    DP_COLOR_420_BLKP_10_V  = DP_COLORFMT_PACK(1, 1, 1, 2, 1, 1, 320, 1, 0, 12),
-    //Frame mode + Block mode
-    DP_COLOR_420_BLKP_UFO_10_H  = DP_COLORFMT_PACK(1, 0, 5, 2, 1, 1, 320, 1, 0, 12),
-    //Frame mode + HEVC tile mode
-    DP_COLOR_420_BLKP_UFO_10_V  = DP_COLORFMT_PACK(1, 1, 5, 2, 1, 1, 320, 1, 0, 12),
+    DP_COLOR_RGBA1010102    = DP_COLORFMT_PACK(1, 0,  0,   1,  0, 0, 0, 32,  0, 1, 2),
+    DP_COLOR_BGRA1010102    = DP_COLORFMT_PACK(1, 0,  0,   1,  0, 0, 0, 32,  0, 0, 2),
+    DP_COLOR_UYVY_10P       = DP_COLORFMT_PACK(1, 0,  0,   1,  0, 1, 0, 20,  1, 0, 4),//Packed 10bit UYVY
+    DP_COLOR_NV21_10P       = DP_COLORFMT_PACK(1, 0,  0,   2,  1, 1, 1, 10,  1, 1, 12),//Packed 10bit NV21
+    DP_COLOR_420_BLKP_10_H  = DP_COLORFMT_PACK(1, 0,  1,   2,  1, 1, 1, 320, 1, 0, 12),//Frame mode + Block mode
+    DP_COLOR_420_BLKP_10_V  = DP_COLORFMT_PACK(1, 1,  1,   2,  1, 1, 1, 320, 1, 0, 12),//Frame mode + HEVC tile mode
+    DP_COLOR_420_BLKP_UFO_10_H  = DP_COLORFMT_PACK(1, 0,  5,   2,  1, 1, 1, 320, 1, 0, 12),//Frame mode + Block mode
+    DP_COLOR_420_BLKP_UFO_10_V  = DP_COLORFMT_PACK(1, 1,  5,   2,  1, 1, 1, 320, 1, 0, 12),//Frame mode + HEVC tile mode
 
     // Loose 10bit format
-    DP_COLOR_UYVY_10L       = DP_COLORFMT_PACK(0, 1, 0, 1, 1, 0, 20,  1, 0, 4),
-    DP_COLOR_VYUY_10L       = DP_COLORFMT_PACK(0, 1, 0, 1, 1, 0, 20,  1, 1, 4),
-    DP_COLOR_YUYV_10L       = DP_COLORFMT_PACK(0, 1, 0, 1, 1, 0, 20,  1, 0, 5),
-    DP_COLOR_YVYU_10L       = DP_COLORFMT_PACK(0, 1, 0, 1, 1, 0, 20,  1, 1, 5),
-    DP_COLOR_NV12_10L       = DP_COLORFMT_PACK(0, 1, 0, 2, 1, 1, 10,  1, 0, 12),
-    DP_COLOR_NV21_10L       = DP_COLORFMT_PACK(0, 1, 0, 2, 1, 1, 10,  1, 1, 12),
-    DP_COLOR_NV16_10L       = DP_COLORFMT_PACK(0, 1, 0, 2, 1, 0, 10,  1, 0, 13),
-    DP_COLOR_NV61_10L       = DP_COLORFMT_PACK(0, 1, 0, 2, 1, 0, 10,  1, 1, 13),
-    DP_COLOR_YV12_10L       = DP_COLORFMT_PACK(0, 1, 0, 3, 1, 1, 10,  1, 1, 8),
-    DP_COLOR_I420_10L       = DP_COLORFMT_PACK(0, 1, 0, 3, 1, 1, 10,  1, 0, 8),
+    DP_COLOR_UYVY_10L       = DP_COLORFMT_PACK(0, 1,  0,   1,  0, 1, 0, 20,  1, 0, 4),
+    DP_COLOR_VYUY_10L       = DP_COLORFMT_PACK(0, 1,  0,   1,  0, 1, 0, 20,  1, 1, 4),
+    DP_COLOR_YUYV_10L       = DP_COLORFMT_PACK(0, 1,  0,   1,  0, 1, 0, 20,  1, 0, 5),
+    DP_COLOR_YVYU_10L       = DP_COLORFMT_PACK(0, 1,  0,   1,  0, 1, 0, 20,  1, 1, 5),
+    DP_COLOR_NV12_10L       = DP_COLORFMT_PACK(0, 1,  0,   2,  1, 1, 1, 10,  1, 0, 12),
+    DP_COLOR_NV21_10L       = DP_COLORFMT_PACK(0, 1,  0,   2,  1, 1, 1, 10,  1, 1, 12),
+    DP_COLOR_NV16_10L       = DP_COLORFMT_PACK(0, 1,  0,   2,  1, 1, 0, 10,  1, 0, 13),
+    DP_COLOR_NV61_10L       = DP_COLORFMT_PACK(0, 1,  0,   2,  1, 1, 0, 10,  1, 1, 13),
+    DP_COLOR_YV12_10L       = DP_COLORFMT_PACK(0, 1,  0,   3,  0, 1, 1, 10,  1, 1, 8),
+    DP_COLOR_I420_10L       = DP_COLORFMT_PACK(0, 1,  0,   3,  0, 1, 1, 10,  1, 0, 8),
+
+//    DP_COLOR_YUV422I        = DP_COLORFMT_PACK(1,  0, 1, 0, 16, 1, 41),//Dup to DP_COLOR_YUYV
+//    DP_COLOR_Y800           = DP_COLORFMT_PACK(1,  0, 1, 0, 8, 1, 42),//Dup to DP_COLOR_GREY
+//    DP_COLOR_COMPACT_RAW1   = DP_COLORFMT_PACK(1,  0, 1, 0, 10, 2, 43),//Dup to Bayer10
+//    DP_COLOR_420_3P_YVU     = DP_COLORFMT_PACK(3,  0, 1, 1,  8, 1, 44),//Dup to DP_COLOR_YV12
 } DP_COLOR_ENUM;
 
 // Legacy for 6589 compatible
@@ -821,7 +736,6 @@ enum DpSecure
 {
     DP_SECURE_NONE  = 0,
     DP_SECURE       = 1,
-    DP_SECURE_PROTECTED = 2,
     DP_SECURE_SHIFT = 8
 };
 
@@ -842,10 +756,11 @@ enum DpBlitUser
     DP_BLIT_ADDITIONAL_DISPLAY = DP_BLIT_HWC5,
 };
 
-#define MAX_NUM_READBACK_REGS (1024)
-#define MAX_NUM_READBACK_PA_BUFFER (MAX_NUM_READBACK_REGS * 2)
+#define MAX_NUM_READBACK_REGS (128)
 
 #define MAX_FRAME_INFO_SIZE (1024)
+
+#define MAX_NUM_READBACK_PA_BUFFER (MAX_NUM_READBACK_REGS * 2)
 
 #define VENC_ENABLE_FLAG    (0x08967)
 

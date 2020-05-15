@@ -30,14 +30,6 @@ public:
         ROT_INVALID = 0x80
     };
 
-    enum DpPaddingSide
-    {
-        PADDING_LEFT   = 0b0001,
-        PADDING_TOP    = 0b0010,
-        PADDING_RIGHT  = 0b0100,
-        PADDING_BOTTOM = 0b1000
-    };
-
     DP_STATUS_ENUM setSrcBuffer(void     *pVABase,
                                 uint32_t size);
 
@@ -161,11 +153,9 @@ public:
 
     DP_STATUS_ENUM setUser(uint32_t eID = 0);
 
-    DP_STATUS_ENUM invalidate(struct timeval *endTime = NULL);
+    DP_STATUS_ENUM invalidate();
 
     DP_STATUS_ENUM pq_process();
-
-    static int32_t queryPaddingSide(uint32_t transform);
 
 private:
     DpStream          *m_pStream;
@@ -203,8 +193,6 @@ private:
     int32_t           m_cropSubPixelY;
     int32_t           m_targetXStart;
     int32_t           m_targetYStart;
-    int32_t           m_roiWidth;
-    int32_t           m_roiHeight;
     int32_t           m_rotation;
     bool              m_frameChange;
     bool              m_flipStatus;
