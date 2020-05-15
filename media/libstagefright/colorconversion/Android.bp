@@ -14,10 +14,12 @@ cc_library_static {
     shared_libs: [
         "libui",
         "libnativewindow",
-        "libdpframework",
     ],
 
-    static_libs: ["libyuv_static"],
+    static_libs: [
+        "libyuv_static",
+        "libdpframework_prot",
+    ],
 
     cflags: ["-Werror",
              "-DMTK_HARDWARE",
