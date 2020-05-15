@@ -140,6 +140,8 @@ cc_library_shared {
         "-DMTK_HARDWARE",
     ],
 
+    allow_undefined_symbols: true,
+
     product_variables: {
         lineage: {
             has_legacy_camera_hal1: {
